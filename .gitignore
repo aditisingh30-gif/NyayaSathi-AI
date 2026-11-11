@@ -1,0 +1,82 @@
+# ===================================================================
+# NyayaSathi - Git Exclusions for Secure Collaboration & Deployment
+# ===================================================================
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+*.env
+*.local
+credentials.json
+client_secret*.json
+
+# Private Keys & Certificates
+*.pem
+*.key
+*.cert
+*.pfx
+id_rsa
+id_rsa.pub
+
+# Local Database & Vector Storage (Never commit local persistent vectors)
+backend/data/chromadb/
+backend/data/chromadb_backup*/
+backend/data/uploads/
+*.sqlite3
+*.bin
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+pytest-cache-files-*/
+
+# Node & Frontend Build Artifacts
+frontend/node_modules/
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor & OS Metadata
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+# Temporary scratch & test artifacts
+backend/scratch_*.py
+backend/verify_*.py
+backend/reindex_*.py

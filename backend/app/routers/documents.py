@@ -1,0 +1,114 @@
+import shutil
+import uuid
+from datetime import datetime
+from pathlib import Path
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from typing import Optional
+from app.config import settings, UPLOADS_DIR
+from app.services.pdf_service import pdf_service
+from app.services.vector_service import vector_service
+from app.services.sample_data_loader import preload_sample_legal_corpus
+from app.models.schemas import (
+    DocumentUploadResponse,
+    DocumentListResponse,
+    DocumentMetadata,
+)
+
+router = APIRouter(prefix="/api/documents", tags=["Documents"])
+
+
+@router.post("/upload", response_model=DocumentUploadResponse)
+async def upload_legal_pdf(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    category: Optional[str] = Form("Legal Document"),
+):
+    """
+    Upload a legal PDF document, extract text and statutory clauses using PyMuPDF,
+    and index vector embeddings into ChromaDB.
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF documents are supported for legal ingestion.",
+        )
+
+    doc_id = f"doc_{uuid.uuid4().hex[:10]}"
+    saved_filename = f"{doc_id}_{file.filename}"
+    saved_path = UPLOADS_DIR / saved_filename
+
+    try:
+        # Save file to disk
+        with open(saved_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Process with PyMuPDF
+        meta, pages = pdf_service.extract_document(
+            file_source=str(saved_path),
+            filename=file.filename,
+            doc_id=doc_id,
+        )
+
+        # Enrich metadata
+        meta["title"] = title if title and len(title.strip()) > 1 else meta.get("title", file.filename)
+        meta["category"] = category or "General Legal"
+        meta["uploaded_at"] = datetime.utcnow().isoformat() + "Z"
+        meta["summary"] = f"Extracted {meta['num_pages']} pages and {meta['total_chars']} characters."
+
+        # Chunk and index
+        chunks = pdf_service.chunk_document(meta, pages)
+        num_indexed = vector_service.add_document_chunks(meta, chunks)
+
+        return DocumentUploadResponse(
+            doc_id=doc_id,
+            filename=file.filename,
+            title=meta["title"],
+            num_pages=meta["num_pages"],
+            num_chunks=num_indexed,
+            status="success",
+            message=f"Successfully ingested and indexed {num_indexed} legal chunks into ChromaDB.",
+        )
+
+    except Exception as e:
+        if saved_path.exists():
+            saved_path.unlink()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process PDF: {str(e)}",
+        )
+
+
+@router.get("", response_model=DocumentListResponse)
+def list_documents():
+    """List all registered legal documents with metadata."""
+    docs = vector_service.list_documents()
+    formatted = [DocumentMetadata(**d) for d in docs]
+    return DocumentListResponse(
+        total_documents=len(formatted),
+        documents=formatted,
+    )
+
+
+@router.get("/{doc_id}", response_model=DocumentMetadata)
+def get_document(doc_id: str):
+    """Retrieve metadata for a specific document."""
+    doc = vector_service.get_document_by_id(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return DocumentMetadata(**doc)
+
+
+@router.delete("/{doc_id}")
+def delete_document(doc_id: str):
+    """Delete a document and all indexed vectors from ChromaDB."""
+    success = vector_service.delete_document(doc_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Document could not be deleted or was not found.")
+    return {"status": "success", "message": f"Document {doc_id} deleted."}
+
+
+@router.post("/preload-samples")
+def trigger_preload_samples():
+    """Pre-populate ChromaDB with Indian Legal Acts and Contract benchmarks."""
+    count = preload_sample_legal_corpus(force=True)
+    return {"status": "success", "message": f"Preloaded {count} benchmark legal documents into ChromaDB."}
