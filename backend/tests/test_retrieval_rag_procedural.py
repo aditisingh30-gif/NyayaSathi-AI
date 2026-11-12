@@ -135,6 +135,21 @@ CONSTITUTION_MOCK_CHUNKS = [
         "document_title": "Constitution of India",
         "category": "Constitutional Law",
     },
+    {
+        "chunk_id": "const_art35",
+        "text": (
+            "35. Legislation to give effect to the provisions of this Part.—"
+            "Notwithstanding anything in this Constitution,—(a) Parliament shall have, and the Legislature of a State shall not have, "
+            "power to make laws with respect to any of the matters which under clause (3) of article 16, clause (3) of article 32, "
+            "article 33 and article 34 may be provided for by law made by Parliament."
+        ),
+        "section_header": "Article 35. Legislation to give effect to the provisions of this Part",
+        "article_number": "35",
+        "page_number": 51,
+        "is_schedule": False,
+        "document_title": "Constitution of India",
+        "category": "Constitutional Law",
+    },
 ]
 
 
@@ -390,3 +405,99 @@ def test_full_rag_pipeline_consumer_procedure_and_distinct_attribution(populated
     c36 = next(c for c in resp.citations if "Section 36" in c.section_header)
     assert c36.page_number == 13
     assert "Consumer Protection Act, 2019" in c36.document_title
+
+
+def test_consumer_complaint_under_section_35_retrieves_cpa_not_constitution_article_35(populated_vector_service):
+    """
+    CRITICAL REGRESSION TEST for live bug:
+    When asking: 'What is the procedure for filing a consumer complaint under Section 35?'
+    1. Must retrieve Consumer Protection Act, 2019 Section 35 (page 12), Section 36 (page 13), and Section 38 (page 15).
+    2. Must NEVER retrieve Constitution of India Article 35 (page 51).
+    3. Full RAG pipeline must generate citations from Consumer Protection Act only.
+    """
+    rag = RAGLegalService(v_service=populated_vector_service)
+    question = "What is the procedure for filing a consumer complaint under Section 35?"
+
+    expanded = rag.expand_query(question)
+    results = populated_vector_service.query_similar(
+        query_text=expanded,
+        top_k=3,
+        original_query=question,
+    )
+
+    assert len(results) > 0, "Expected results for consumer complaint under Section 35"
+
+    # Verify top result is CPA Section 35
+    top = results[0]
+    assert top["article_number"] == "35"
+    assert "Consumer Protection Act, 2019" in top["document_title"]
+    assert top["page_number"] == 12
+    assert "Section 35" in top["section_header"]
+
+    # Verify procedural multi-section retrieval includes Sections 36 and/or 38
+    retrieved_sections = [r["article_number"] for r in results]
+    assert "35" in retrieved_sections
+    assert any(s in retrieved_sections for s in ("36", "38"))
+
+    # Verify Constitution Article 35 was NEVER retrieved
+    for r in results:
+        assert r["document_title"] != "Constitution of India", (
+            f"Constitution of India erroneously retrieved for consumer query: {r}"
+        )
+        assert not r["section_header"].startswith("Article 35"), (
+            f"Article 35 erroneously retrieved for Section 35 consumer query: {r}"
+        )
+
+    # Full RAG pipeline verification
+    req = QueryRequest(question=question)
+    resp = rag.query(req)
+    assert len(resp.citations) >= 1
+    for c in resp.citations:
+        assert c.document_title == "Consumer Protection Act, 2019"
+        assert "Article" not in c.section_header
+        assert c.section_header.startswith("Section ")
+
+
+def test_constitution_article_35_query_retrieves_constitution_article_35(populated_vector_service):
+    """
+    Verify that querying for 'Article 35 of the Constitution of India'
+    strictly retrieves Constitution of India Article 35 (page 51) and NOT CPA Section 35.
+    """
+    rag = RAGLegalService(v_service=populated_vector_service)
+    question = "What is Article 35 of the Constitution of India?"
+
+    expanded = rag.expand_query(question)
+    results = populated_vector_service.query_similar(
+        query_text=expanded,
+        top_k=3,
+        original_query=question,
+    )
+
+    assert len(results) > 0
+    top = results[0]
+    assert top["article_number"] == "35"
+    assert top["document_title"] == "Constitution of India"
+    assert top["page_number"] == 51
+    assert "Article 35" in top["section_header"]
+
+    # Verify CPA Section 35 was NOT retrieved
+    for r in results:
+        assert r["document_title"] != "Consumer Protection Act, 2019", (
+            f"CPA erroneously retrieved for Constitution Article 35 query: {r}"
+        )
+
+
+def test_bare_section_35_query_returns_source_not_available(populated_vector_service):
+    """
+    A bare query mentioning only 'Section 35' without statute or subject matter context
+    must NOT arbitrarily select an unrelated document; it must return Source Not Available.
+    """
+    rag = RAGLegalService(v_service=populated_vector_service)
+    question = "What does Section 35 say?"
+
+    req = QueryRequest(question=question)
+    resp = rag.query(req)
+
+    assert len(resp.citations) == 0, f"Expected 0 citations for ambiguous bare query, got {resp.citations}"
+    assert "Source Not Available in Knowledge Base" in resp.answer
+    assert resp.confidence_score == 0.0

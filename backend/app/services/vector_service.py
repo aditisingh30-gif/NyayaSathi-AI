@@ -26,7 +26,8 @@ GENERIC_LEGAL_FRAMEWORK_WORDS = {
     "section", "sections", "article", "articles", "clause", "clauses",
     "act", "provision", "provisions", "law", "statute", "rule", "rules",
     "mention", "relevant", "state", "under", "court", "matter", "case",
-    "india", "indian", "national", "central"
+    "india", "indian", "national", "central", "say", "says", "tell", "explain",
+    "provide", "provides", "about", "what", "does"
 }
 
 
@@ -36,14 +37,24 @@ def extract_substantive_tokens(text: str) -> Set[str]:
     return {w for w in words if w not in LEGAL_STOP_WORDS and len(w) > 1}
 
 
+def extract_target_provision_details(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract statutory prefix ('section', 'article', 'clause') and provision number
+    from query text, preserving alphanumeric suffixes (e.g. '21a', '35').
+    """
+    m = re.findall(r"\b(section|article|clause)\s+(\d+[a-z]?)\b", text, re.I)
+    if m:
+        return m[0][0].lower(), m[0][1].lower()
+    return None, None
+
+
 def extract_provision_target(text: str) -> Optional[str]:
     """
-    Extract statutory section, article, or clause target from text.
-    Handles 'Article 21', 'Article 21A', 'Section 73', 'Clause 9',
-    preserving alphanumeric suffixes like '21a' without confusing with '21'.
+    Extract statutory section, article, or clause target number from text.
+    Handles 'Article 21', 'Article 21A', 'Section 73', 'Clause 9'.
     """
-    matches = re.findall(r"\b(?:section|article|clause)\s+(\d+[a-z]?)\b", text, re.I)
-    return matches[0].lower() if matches else None
+    _, num = extract_target_provision_details(text)
+    return num
 
 
 def extract_header_provision(header: str) -> Optional[str]:
@@ -280,13 +291,10 @@ class ChromaVectorService:
             include=["documents", "metadatas", "distances"]
         )
 
-        if not results or not results["ids"] or not results["ids"][0]:
-            return []
-
-        ids = results["ids"][0]
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        distances = results["distances"][0] if results.get("distances") else [0.0] * len(ids)
+        ids = results["ids"][0] if (results and results.get("ids") and results["ids"][0]) else []
+        docs = results["documents"][0] if (results and results.get("documents") and results["documents"][0]) else []
+        metas = results["metadatas"][0] if (results and results.get("metadatas") and results["metadatas"][0]) else []
+        distances = results["distances"][0] if (results and results.get("distances") and results["distances"][0]) else [0.0] * len(ids)
 
         query_substantive = extract_substantive_tokens(query_text)
 
@@ -294,9 +302,13 @@ class ChromaVectorService:
         # This prevents "Section 420" injected by query expansion from blocking unrelated
         # but genuinely relevant chunks (e.g. BNS Section 318 for a "cheating" query).
         section_guard_query = original_query if original_query else query_text
+        guard_substantive = extract_substantive_tokens(section_guard_query)
+        combined_substantive = query_substantive.union(guard_substantive)
 
-        # Extract target article/section number from original query
-        target_number = extract_provision_target(section_guard_query)
+        # Extract statutory prefix ('section', 'article') and number ('35', '21')
+        target_prefix, target_number = extract_target_provision_details(section_guard_query)
+        if not target_number:
+            target_number = extract_provision_target(section_guard_query)
 
         # Also check if query is specifically about a schedule (e.g. "Second Schedule")
         query_asks_schedule = bool(re.search(
@@ -304,10 +316,49 @@ class ChromaVectorService:
             section_guard_query
         ))
 
-        # --- Exact Metadata Matching Stage ---
-        # When user explicitly queries for an article/section (e.g., 'Article 21', 'Article 21A'),
-        # directly query ChromaDB metadata for exact article_number matches.
-        exact_match_chunks: List[Dict[str, Any]] = []
+        # Detect legal subject domain from query text
+        is_consumer_query = bool(re.search(
+            r"\b(consumer|deficiency|complaint|complainant|district\s+commission|state\s+commission|national\s+commission|ccpa|e-daakhil|cpa)\b",
+            section_guard_query, re.I
+        ))
+        is_constitution_query = bool(re.search(
+            r"\b(constitution|fundamental\s+right|writs?|habeas|mandamus|article\s+\d+|preamble)\b",
+            section_guard_query, re.I
+        ))
+        is_contract_query = bool(re.search(
+            r"\b(contract|agreement|consideration|breach\s+of\s+contract|voidable|indemnity|guarantee)\b",
+            section_guard_query, re.I
+        ))
+        is_criminal_query = bool(re.search(
+            r"\b(penal|crime|criminal|bns|ipc|bnss|crpc|cheating|theft|murder|arrest|bail)\b",
+            section_guard_query, re.I
+        ))
+        is_data_privacy_query = bool(re.search(
+            r"\b(dpdp|data\s+protection|privacy|data\s+fiduciary|data\s+principal)\b",
+            section_guard_query, re.I
+        ))
+        has_statute_domain = (
+            is_consumer_query or is_constitution_query or is_contract_query
+            or is_criminal_query or is_data_privacy_query
+        )
+
+        # Substantive subject-matter terms excluding generic legal framework terminology and provision numbers
+        query_subject_terms = {
+            t for t in guard_substantive
+            if t not in GENERIC_LEGAL_FRAMEWORK_WORDS and not t.isdigit() and (not target_number or t != target_number)
+        }
+
+        # Ambiguous bare provision query guard:
+        # If the user asks only e.g. "What does Section 35 say?" without any statute domain or subject terms,
+        # we must NOT arbitrarily guess an unrelated document; return empty so RAG reports Source Not Available.
+        if target_number and len(query_subject_terms) == 0 and not has_statute_domain:
+            return []
+
+        # Collect candidate chunks: combine vector results with exact metadata matches
+        candidate_map: Dict[str, Tuple[str, Dict[str, Any], float]] = {}
+        for cid, doc_text, meta, dist in zip(ids, docs, metas, distances):
+            candidate_map[cid] = (doc_text, meta, float(dist))
+
         if target_number:
             exact_where: Dict[str, Any] = {"article_number": target_number}
             if doc_ids and len(doc_ids) == 1:
@@ -322,28 +373,13 @@ class ChromaVectorService:
                 )
                 if exact_res and exact_res.get("ids"):
                     for e_id, e_doc, e_meta in zip(exact_res["ids"], exact_res["documents"], exact_res["metadatas"]):
-                        # Ensure schedule chunk is not returned unless specifically asked
-                        is_sched = str(e_meta.get("is_schedule", "False")).lower() in ("true", "1", "yes")
-                        if is_sched and not query_asks_schedule:
-                            continue
-                        exact_match_chunks.append({
-                            "chunk_id": e_id,
-                            "text": e_doc,
-                            "metadata": e_meta,
-                            "document_id": e_meta.get("document_id", ""),
-                            "document_title": e_meta.get("document_title", ""),
-                            "page_number": int(e_meta.get("page_number", 1)),
-                            "section_header": e_meta.get("section_header", ""),
-                            "article_number": e_meta.get("article_number", ""),
-                            "category": e_meta.get("category", ""),
-                            "relevance_score": 1.0,  # Highest confidence for exact metadata match
-                        })
+                        if e_id not in candidate_map:
+                            candidate_map[e_id] = (e_doc, e_meta, 0.0)
             except Exception as e:
                 print(f"Notice: exact metadata match query skipped: {e}")
 
-        # If exact metadata matches found, prioritize them
-        if exact_match_chunks:
-            return exact_match_chunks[:top_k]
+        if not candidate_map:
+            return []
 
         # Classify legal intent of query
         query_intent = detect_legal_intent(section_guard_query)
@@ -352,7 +388,44 @@ class ChromaVectorService:
 
         scored_chunks = []
 
-        for cid, doc_text, meta, dist in zip(ids, docs, metas, distances):
+        for cid, (doc_text, meta, dist) in candidate_map.items():
+            doc_title = meta.get("document_title", "").lower()
+            category = meta.get("category", "").lower()
+            chunk_sec_header = meta.get("section_header", "").lower().strip()
+            chunk_article_num = meta.get("article_number", "").lower().strip()
+            chunk_text_lower = doc_text.lower()
+
+            chunk_is_consumer = any(w in doc_title or w in category for w in ("consumer", "cpa"))
+            chunk_is_constitution = any(w in doc_title or w in category for w in ("constitution",)) or "the constitution of india" in doc_title
+            chunk_is_contract = any(w in doc_title or w in category for w in ("contract",))
+            chunk_is_criminal = any(w in doc_title or w in category for w in ("penal", "bns", "bnss", "criminal"))
+            chunk_is_data_privacy = any(w in doc_title or w in category for w in ("dpdp", "data protection"))
+
+            # Guard 1: Legal Subject Domain Mismatch Guardrails
+            # A consumer query must NEVER return Constitution, Contract, or Criminal documents.
+            # A Constitution query must NEVER return Consumer or Contract statutes.
+            if is_consumer_query and not chunk_is_consumer:
+                continue
+            if is_constitution_query and not chunk_is_constitution:
+                continue
+            if is_contract_query and not chunk_is_contract:
+                continue
+            if is_criminal_query and not chunk_is_criminal:
+                continue
+            if is_data_privacy_query and not chunk_is_data_privacy:
+                continue
+
+            # Guard 2: Statutory Prefix Mismatch Guardrail ('Section' vs 'Article')
+            # Statutory Acts have Sections, while the Constitution of India has Articles.
+            # Never treat Constitution Article 35 as Section 35 of an Act.
+            if target_prefix == "section":
+                if chunk_is_constitution or chunk_sec_header.startswith("article "):
+                    continue
+            elif target_prefix == "article":
+                if (chunk_is_consumer or chunk_is_contract or chunk_is_criminal or
+                        chunk_sec_header.startswith("section ")):
+                    continue
+
             # 1. Base vector similarity from cosine distance
             vector_sim = max(0.0, min(1.0, 1.0 - (float(dist) / 2.0)))
 
@@ -360,8 +433,8 @@ class ChromaVectorService:
             chunk_tokens = extract_substantive_tokens(
                 doc_text + " " + meta.get("section_header", "") + " " + meta.get("document_title", "")
             )
-            overlap_tokens = query_substantive.intersection(chunk_tokens)
-            lexical_ratio = (len(overlap_tokens) / len(query_substantive)) if query_substantive else 0.0
+            overlap_tokens = combined_substantive.intersection(chunk_tokens)
+            lexical_ratio = (len(overlap_tokens) / len(combined_substantive)) if combined_substantive else 0.0
 
             # 3. Guardrail: If substantive terms have zero overlap, the chunk is unrelated!
             if len(overlap_tokens) == 0:
@@ -369,7 +442,6 @@ class ChromaVectorService:
 
             # 3b. Subject matter grounding: If user query contains specific subject/domain terms,
             # ensure at least one subject term matches the chunk rather than only generic procedural words.
-            query_subject_terms = {t for t in query_substantive if t not in GENERIC_LEGAL_FRAMEWORK_WORDS}
             if query_subject_terms and len(query_subject_terms.intersection(chunk_tokens)) == 0:
                 continue
 
@@ -383,32 +455,29 @@ class ChromaVectorService:
                 continue
 
             # 5. Provision mismatch guardrail using article_number metadata and header extraction
-            if target_number:
-                chunk_article_num = meta.get("article_number", "").lower().strip()
-                chunk_sec_header = meta.get("section_header", "").lower().strip()
+            header_prov = extract_header_provision(chunk_sec_header)
+            matches_target_number = (
+                (chunk_article_num and chunk_article_num == target_number)
+                or (header_prov and header_prov == target_number)
+                or (target_number and target_number in chunk_tokens)
+            )
 
-                if chunk_article_num:
-                    # Exact article_number metadata mismatch check
-                    # Guarantees e.g. "21a" is never confused with "21", and "22" never matches "21"
-                    if chunk_article_num != target_number and target_number not in chunk_tokens:
-                        continue
-                else:
-                    # Fallback: extract provision from section_header using bare-number and prefix patterns
-                    header_prov = extract_header_provision(chunk_sec_header)
-                    if header_prov and header_prov != target_number and target_number not in chunk_tokens:
-                        continue
-                    # If target_number is specified (e.g. "999", "21") but chunk has neither an article_number
-                    # nor a header provision matching target_number AND target_number is NOT in chunk_tokens,
-                    # this chunk is an unrelated fragment (e.g., page header or preamble fragment) -> reject!
-                    if not header_prov and target_number not in chunk_tokens:
+            if target_number:
+                if not matches_target_number:
+                    # Procedural multi-section allowance: For procedural consumer queries,
+                    # related procedural sections (35, 36, 38) are necessary to answer the procedural flow.
+                    if query_intent["is_procedural"] and chunk_is_consumer:
+                        is_cpa_procedural = (
+                            chunk_article_num in ("35", "36", "38")
+                            or any(s in chunk_sec_header for s in ("section 35", "section 36", "section 38", "manner", "proceedings before district commission", "procedure on admission"))
+                        )
+                        if not is_cpa_procedural:
+                            continue
+                    else:
                         continue
 
             # 6. Hybrid blended score (55% lexical grounding + 45% vector similarity)
             hybrid_score = (0.55 * lexical_ratio) + (0.45 * vector_sim)
-
-            chunk_sec_header = meta.get("section_header", "").lower().strip()
-            chunk_text_lower = doc_text.lower()
-            chunk_article_num = meta.get("article_number", "").lower().strip()
 
             # Bonus: exact target number matches article_number metadata field
             if target_number and chunk_article_num == target_number:
