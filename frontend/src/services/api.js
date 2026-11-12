@@ -1,6 +1,7 @@
 // Use environment variable in production (e.g., on Vercel), fallback to local FastAPI for development
-const API_BASE = import.meta.env.VITE_API_BASE_URL 
-  ? `${import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, "")}/api`
+const rawUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
+const API_BASE = rawUrl
+  ? `${rawUrl.replace(/\/+$/, "").replace(/\/api$/, "")}/api`
   : "http://localhost:8000/api";
 
 export async function getHealth() {
