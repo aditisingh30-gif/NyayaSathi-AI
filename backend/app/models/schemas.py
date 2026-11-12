@@ -118,17 +118,28 @@ class PolicyComplianceRequest(BaseModel):
 
 
 class ComplianceCheckItem(BaseModel):
+    control_name: Optional[str] = None
     framework_requirement: str
-    status: str  # COMPLIANT, NON_COMPLIANT, PARTIAL_RISK, NOT_APPLICABLE
+    status: str  # COMPLIANT, PARTIALLY_COMPLIANT, NON_COMPLIANT
     finding: str
+    evidence_extracted: Optional[str] = "No evidence found in submitted policy."
+    missing_requirements: Optional[str] = "None identified."
     section_reference: str
+    commencement_status: Optional[str] = (
+        "Enacted (Sections 3–5, 6(1)–(8), 6(10), and 7–17 scheduled to commence on 13 May 2027; "
+        "Section 6(9) scheduled to commence tomorrow, 13 November 2026, under G.S.R. 843(E))"
+    )
     remediation_step: str
+    points_awarded: Optional[int] = 0
+    max_points: Optional[int] = 100
 
 
 class PolicyComplianceResponse(BaseModel):
     framework: str
     title: str
     overall_compliance_percentage: int
+    controls_assessed: Optional[int] = 4
+    commencement_notice: Optional[str] = None
     checks: List[ComplianceCheckItem]
     executive_summary: str
     disclaimer: str

@@ -40,8 +40,9 @@ export default function PolicyAuditor({ documents = [] }) {
         return <span className="badge badge-low"><CheckCircle2 size={12} /> Compliant</span>;
       case "NON_COMPLIANT":
         return <span className="badge badge-critical"><XCircle size={12} /> Non-Compliant</span>;
+      case "PARTIALLY_COMPLIANT":
       case "PARTIAL_RISK":
-        return <span className="badge badge-medium"><AlertCircle size={12} /> Partial / Risk</span>;
+        return <span className="badge badge-medium"><AlertCircle size={12} /> Partially Compliant</span>;
       default:
         return <span className="badge badge-low">{status}</span>;
     }
@@ -172,6 +173,11 @@ export default function PolicyAuditor({ documents = [] }) {
               <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
                 {result.executive_summary}
               </p>
+              {result.commencement_notice && (
+                <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", background: "rgba(59, 130, 246, 0.1)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: "6px", fontSize: "0.74rem", color: "#93C5FD" }}>
+                  ⚖️ {result.commencement_notice}
+                </div>
+              )}
             </div>
 
             <div style={{ textAlign: "right" }}>
@@ -197,14 +203,35 @@ export default function PolicyAuditor({ documents = [] }) {
                 }}
               >
                 <div>
-                  <div style={{ fontSize: "0.9rem", fontWeight: 700, color: "#FFFFFF", marginBottom: "0.3rem" }}>
-                    {c.framework_requirement}
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.3rem" }}>
+                    <span style={{ fontSize: "0.9rem", fontWeight: 700, color: "#FFFFFF" }}>
+                      {c.control_name || c.framework_requirement}
+                    </span>
+                    {c.control_name && (
+                      <span style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                        ({c.framework_requirement})
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.5rem" }}>
                     {c.finding}
                   </div>
 
-                  <div style={{ background: "rgba(0,0,0,0.3)", padding: "0.5rem 0.75rem", borderRadius: "6px", fontSize: "0.76rem", display: "flex", gap: "1.5rem" }}>
+                  {c.evidence_extracted && c.evidence_extracted !== "No evidence found in submitted policy." && (
+                    <div style={{ background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.2)", padding: "0.4rem 0.6rem", borderRadius: "5px", fontSize: "0.75rem", marginBottom: "0.4rem", color: "#6EE7B7" }}>
+                      <strong>Evidence Extracted: </strong>
+                      <span>{c.evidence_extracted}</span>
+                    </div>
+                  )}
+
+                  {c.missing_requirements && c.missing_requirements !== "None identified." && c.missing_requirements !== "None. Satisfies baseline Section 5 notice mandates." && (
+                    <div style={{ background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.2)", padding: "0.4rem 0.6rem", borderRadius: "5px", fontSize: "0.75rem", marginBottom: "0.5rem", color: "#FCA5A5" }}>
+                      <strong>Missing Requirements: </strong>
+                      <span>{c.missing_requirements}</span>
+                    </div>
+                  )}
+
+                  <div style={{ background: "rgba(0,0,0,0.3)", padding: "0.5rem 0.75rem", borderRadius: "6px", fontSize: "0.76rem", display: "flex", flexWrap: "wrap", gap: "1rem" }}>
                     <div>
                       <strong style={{ color: "var(--gold-accent)" }}>Statutory Ref: </strong>
                       <span>{c.section_reference}</span>

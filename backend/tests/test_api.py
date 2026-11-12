@@ -96,7 +96,12 @@ def test_clause_risk_analysis(client):
 
 def test_policy_compliance_audit(client):
     policy_payload = {
-        "policy_text": "We provide clear notice of personal data processing. We implement encryption safeguards. Users may request erasure of their records. Our Grievance Officer can be contacted at grievance@legalai.in.",
+        "policy_text": (
+            "We collect personal data including names and email addresses for user authentication. "
+            "We implement AES-256 encryption and incident reporting safeguards. "
+            "Users may request access, correction, erasure of their records, and withdraw consent. "
+            "Our Grievance Officer Mr. Sharma can be contacted at grievance@legalai.in, Cyber City, Gurugram."
+        ),
         "framework": "DPDP_ACT_2023"
     }
     response = client.post("/api/analysis/policy", json=policy_payload)
