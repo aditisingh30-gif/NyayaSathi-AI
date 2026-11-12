@@ -37,24 +37,47 @@ def extract_substantive_tokens(text: str) -> Set[str]:
     return {w for w in words if w not in LEGAL_STOP_WORDS and len(w) > 1}
 
 
-def extract_target_provision_details(text: str) -> Tuple[Optional[str], Optional[str]]:
+def extract_target_provision_details(text: str) -> Tuple[Optional[str], Set[str]]:
     """
-    Extract statutory prefix ('section', 'article', 'clause') and provision number
-    from query text, preserving alphanumeric suffixes (e.g. '21a', '35').
+    Extract statutory prefix ('section', 'article', 'clause') and set of all target provision
+    numbers mentioned in the query (e.g. 'Section 35', 'Sections 35, 36 and 38', 'Sections 35, 36, 38 and 39').
     """
-    m = re.findall(r"\b(section|article|clause)\s+(\d+[a-z]?)\b", text, re.I)
-    if m:
-        return m[0][0].lower(), m[0][1].lower()
-    return None, None
+    prefix = None
+    m_p = re.findall(r"\b(section|sections|article|articles|clause|clauses)\b", text, re.I)
+    if m_p:
+        raw_p = m_p[0].lower()
+        if raw_p.startswith("section"):
+            prefix = "section"
+        elif raw_p.startswith("article"):
+            prefix = "article"
+        elif raw_p.startswith("clause"):
+            prefix = "clause"
+
+    target_numbers = set()
+    # 1. Multi-number clauses like 'Sections 35, 36 and 38', 'Sections 35, 36, 38 and 39'
+    multi_matches = re.findall(
+        r"\b(?:sections?|articles?|clauses?)\s+([0-9a-z,\s]+?)(?:\s+of|\s+separately|\?|\.|$)",
+        text, re.I
+    )
+    for m in multi_matches:
+        found = re.findall(r"\b(\d+[a-z]?)\b", m, re.I)
+        target_numbers.update(found)
+
+    # 2. Direct single/standalone matches e.g. 'section 35'
+    direct_matches = re.findall(r"\b(?:sections?|articles?|clauses?)\s+(\d+[a-z]?)\b", text, re.I)
+    for num in direct_matches:
+        target_numbers.add(num.lower())
+
+    return prefix, {n.lower() for n in target_numbers}
 
 
 def extract_provision_target(text: str) -> Optional[str]:
     """
-    Extract statutory section, article, or clause target number from text.
+    Extract single statutory section, article, or clause target number from text.
     Handles 'Article 21', 'Article 21A', 'Section 73', 'Clause 9'.
     """
-    _, num = extract_target_provision_details(text)
-    return num
+    _, nums = extract_target_provision_details(text)
+    return sorted(list(nums))[0] if nums else None
 
 
 def extract_header_provision(header: str) -> Optional[str]:
@@ -305,10 +328,12 @@ class ChromaVectorService:
         guard_substantive = extract_substantive_tokens(section_guard_query)
         combined_substantive = query_substantive.union(guard_substantive)
 
-        # Extract statutory prefix ('section', 'article') and number ('35', '21')
-        target_prefix, target_number = extract_target_provision_details(section_guard_query)
-        if not target_number:
-            target_number = extract_provision_target(section_guard_query)
+        # Extract statutory prefix ('section', 'article') and set of target provision numbers ({'35', '36', '38'})
+        target_prefix, target_numbers = extract_target_provision_details(section_guard_query)
+        if not target_numbers:
+            single_num = extract_provision_target(section_guard_query)
+            if single_num:
+                target_numbers = {single_num}
 
         # Also check if query is specifically about a schedule (e.g. "Second Schedule")
         query_asks_schedule = bool(re.search(
@@ -345,13 +370,13 @@ class ChromaVectorService:
         # Substantive subject-matter terms excluding generic legal framework terminology and provision numbers
         query_subject_terms = {
             t for t in guard_substantive
-            if t not in GENERIC_LEGAL_FRAMEWORK_WORDS and not t.isdigit() and (not target_number or t != target_number)
+            if t not in GENERIC_LEGAL_FRAMEWORK_WORDS and not t.isdigit() and (t not in target_numbers)
         }
 
         # Ambiguous bare provision query guard:
         # If the user asks only e.g. "What does Section 35 say?" without any statute domain or subject terms,
         # we must NOT arbitrarily guess an unrelated document; return empty so RAG reports Source Not Available.
-        if target_number and len(query_subject_terms) == 0 and not has_statute_domain:
+        if target_numbers and len(query_subject_terms) == 0 and not has_statute_domain:
             return []
 
         # Collect candidate chunks: combine vector results with exact metadata matches
@@ -359,24 +384,25 @@ class ChromaVectorService:
         for cid, doc_text, meta, dist in zip(ids, docs, metas, distances):
             candidate_map[cid] = (doc_text, meta, float(dist))
 
-        if target_number:
-            exact_where: Dict[str, Any] = {"article_number": target_number}
-            if doc_ids and len(doc_ids) == 1:
-                exact_where = {"$and": [{"article_number": target_number}, {"document_id": doc_ids[0]}]}
-            elif doc_ids and len(doc_ids) > 1:
-                exact_where = {"$and": [{"article_number": target_number}, {"document_id": {"$in": doc_ids}}]}
+        if target_numbers:
+            for tn in target_numbers:
+                exact_where: Dict[str, Any] = {"article_number": tn}
+                if doc_ids and len(doc_ids) == 1:
+                    exact_where = {"$and": [{"article_number": tn}, {"document_id": doc_ids[0]}]}
+                elif doc_ids and len(doc_ids) > 1:
+                    exact_where = {"$and": [{"article_number": tn}, {"document_id": {"$in": doc_ids}}]}
 
-            try:
-                exact_res = self.collection.get(
-                    where=exact_where,
-                    include=["documents", "metadatas"]
-                )
-                if exact_res and exact_res.get("ids"):
-                    for e_id, e_doc, e_meta in zip(exact_res["ids"], exact_res["documents"], exact_res["metadatas"]):
-                        if e_id not in candidate_map:
-                            candidate_map[e_id] = (e_doc, e_meta, 0.0)
-            except Exception as e:
-                print(f"Notice: exact metadata match query skipped: {e}")
+                try:
+                    exact_res = self.collection.get(
+                        where=exact_where,
+                        include=["documents", "metadatas"]
+                    )
+                    if exact_res and exact_res.get("ids"):
+                        for e_id, e_doc, e_meta in zip(exact_res["ids"], exact_res["documents"], exact_res["metadatas"]):
+                            if e_id not in candidate_map:
+                                candidate_map[e_id] = (e_doc, e_meta, 0.0)
+                except Exception as e:
+                    print(f"Notice: exact metadata match query skipped: {e}")
 
         if not candidate_map:
             return []
@@ -391,15 +417,27 @@ class ChromaVectorService:
         for cid, (doc_text, meta, dist) in candidate_map.items():
             doc_title = meta.get("document_title", "").lower()
             category = meta.get("category", "").lower()
+            filename = meta.get("filename", "").lower()
             chunk_sec_header = meta.get("section_header", "").lower().strip()
             chunk_article_num = meta.get("article_number", "").lower().strip()
             chunk_text_lower = doc_text.lower()
 
-            chunk_is_consumer = any(w in doc_title or w in category for w in ("consumer", "cpa"))
-            chunk_is_constitution = any(w in doc_title or w in category for w in ("constitution",)) or "the constitution of india" in doc_title
-            chunk_is_contract = any(w in doc_title or w in category for w in ("contract",))
-            chunk_is_criminal = any(w in doc_title or w in category for w in ("penal", "bns", "bnss", "criminal"))
-            chunk_is_data_privacy = any(w in doc_title or w in category for w in ("dpdp", "data protection"))
+            chunk_is_consumer = (
+                any(w in doc_title or w in category or w in filename for w in ("consumer", "cpa"))
+                or any(phrase in chunk_text_lower for phrase in (
+                    "consumer protection act", "district commission", "state commission",
+                    "national commission", "consumer dispute", "central consumer protection authority",
+                    "manner in which complaint shall be made", "manner in which complaint", "e-daakhil"
+                ))
+            )
+            chunk_is_constitution = (
+                any(w in doc_title or w in category or w in filename for w in ("constitution",))
+                or "the constitution of india" in doc_title
+                or "the constitution of india" in chunk_text_lower[:200]
+            )
+            chunk_is_contract = any(w in doc_title or w in category or w in filename for w in ("contract",))
+            chunk_is_criminal = any(w in doc_title or w in category or w in filename for w in ("penal", "bns", "bnss", "criminal"))
+            chunk_is_data_privacy = any(w in doc_title or w in category or w in filename for w in ("dpdp", "data protection"))
 
             # Guard 1: Legal Subject Domain Mismatch Guardrails
             # A consumer query must NEVER return Constitution, Contract, or Criminal documents.
@@ -447,22 +485,22 @@ class ChromaVectorService:
 
             # 4. Schedule/header-only penalty: query is for a main article but chunk is from a Schedule/Appendix
             is_schedule_chunk = str(meta.get("is_schedule", "False")).lower() in ("true", "1", "yes")
-            if is_schedule_chunk and not query_asks_schedule and target_number:
+            if is_schedule_chunk and not query_asks_schedule and target_numbers:
                 continue
 
             # Also check text content for schedule headings
-            if not query_asks_schedule and target_number and len(doc_text.strip()) < 120 and "schedule" in doc_text.lower():
+            if not query_asks_schedule and target_numbers and len(doc_text.strip()) < 120 and "schedule" in doc_text.lower():
                 continue
 
             # 5. Provision mismatch guardrail using article_number metadata and header extraction
             header_prov = extract_header_provision(chunk_sec_header)
             matches_target_number = (
-                (chunk_article_num and chunk_article_num == target_number)
-                or (header_prov and header_prov == target_number)
-                or (target_number and target_number in chunk_tokens)
+                (chunk_article_num and chunk_article_num in target_numbers)
+                or (header_prov and header_prov in target_numbers)
+                or any(tn in chunk_tokens for tn in target_numbers)
             )
 
-            if target_number:
+            if target_numbers:
                 if not matches_target_number:
                     # Procedural multi-section allowance: For procedural consumer queries,
                     # related procedural sections (35, 36, 38) are necessary to answer the procedural flow.
@@ -470,6 +508,7 @@ class ChromaVectorService:
                         is_cpa_procedural = (
                             chunk_article_num in ("35", "36", "38")
                             or any(s in chunk_sec_header for s in ("section 35", "section 36", "section 38", "manner", "proceedings before district commission", "procedure on admission"))
+                            or any(p in chunk_text_lower for p in ("35. (1)", "36. (1)", "38. (1)", "manner in which complaint shall be made", "proceedings before district commission", "admissibility of the complaint", "procedure on admission"))
                         )
                         if not is_cpa_procedural:
                             continue
@@ -480,10 +519,12 @@ class ChromaVectorService:
             hybrid_score = (0.55 * lexical_ratio) + (0.45 * vector_sim)
 
             # Bonus: exact target number matches article_number metadata field
-            if target_number and chunk_article_num == target_number:
+            if target_numbers and (chunk_article_num in target_numbers):
                 hybrid_score = min(1.0, hybrid_score + 0.35)  # strong boost for exact match
-            # Bonus: target number found in section_header text
-            elif target_number and target_number in chunk_sec_header:
+            # Bonus: target number found in section_header text or direct text start
+            elif target_numbers and any(tn in chunk_sec_header for tn in target_numbers):
+                hybrid_score = min(1.0, hybrid_score + 0.25)
+            elif target_numbers and any(f"{tn}. (" in chunk_text_lower[:60] for tn in target_numbers):
                 hybrid_score = min(1.0, hybrid_score + 0.25)
 
             # 7. Intent-aware semantic reranking
@@ -505,12 +546,30 @@ class ChromaVectorService:
             )
 
             # Section-specific markers for Consumer Protection Act
-            is_sec35 = chunk_article_num == "35" or "section 35" in chunk_sec_header or "manner in which complaint shall be made" in chunk_sec_header
-            is_sec36 = chunk_article_num == "36" or "section 36" in chunk_sec_header or "proceedings before district commission" in chunk_sec_header or "admissibility" in chunk_text_lower
-            is_sec38 = chunk_article_num == "38" or "section 38" in chunk_sec_header or "procedure on admission" in chunk_sec_header or "opposite party" in chunk_text_lower
+            is_sec35 = (
+                chunk_article_num == "35"
+                or "section 35" in chunk_sec_header
+                or "manner in which complaint" in chunk_sec_header
+                or "35. (1)" in chunk_text_lower[:80]
+                or "manner in which complaint shall be made" in chunk_text_lower
+            )
+            is_sec36 = (
+                chunk_article_num == "36"
+                or "section 36" in chunk_sec_header
+                or "proceedings before district commission" in chunk_sec_header
+                or "36. (1)" in chunk_text_lower[:80]
+                or "admissibility" in chunk_text_lower
+            )
+            is_sec38 = (
+                chunk_article_num == "38"
+                or "section 38" in chunk_sec_header
+                or "procedure on admission" in chunk_sec_header
+                or "38. (1)" in chunk_text_lower[:80]
+                or "opposite party" in chunk_text_lower
+            )
 
-            if query_intent["is_procedural"]:
-                if chunk_is_procedural:
+            if query_intent["is_procedural"] and chunk_is_consumer:
+                if chunk_is_procedural or is_sec35 or is_sec36 or is_sec38:
                     hybrid_score = min(1.0, hybrid_score + 0.35)
 
                     # Fine-grained sub-intent weighting
@@ -523,14 +582,26 @@ class ChromaVectorService:
                     elif is_sec35:
                         hybrid_score = min(1.0, hybrid_score + 0.15)
                     elif is_sec36:
-                        hybrid_score = min(1.0, hybrid_score + 0.10)
+                        hybrid_score = min(1.0, hybrid_score + 0.12)
                     elif is_sec38:
-                        hybrid_score = min(1.0, hybrid_score + 0.08)
+                        hybrid_score = min(1.0, hybrid_score + 0.10)
 
                 elif chunk_is_definition and not query_intent["is_definition"]:
                     hybrid_score = max(0.0, hybrid_score - 0.30)
                 elif chunk_is_authority and not query_intent["is_authority"]:
                     hybrid_score = max(0.0, hybrid_score - 0.25)
+
+            elif query_intent["is_definition"]:
+                if chunk_is_definition:
+                    hybrid_score = min(1.0, hybrid_score + 0.35)
+                elif chunk_is_procedural:
+                    hybrid_score = max(0.0, hybrid_score - 0.20)
+
+            elif query_intent["is_authority"]:
+                if chunk_is_authority:
+                    hybrid_score = min(1.0, hybrid_score + 0.35)
+                elif chunk_is_definition or chunk_is_procedural:
+                    hybrid_score = max(0.0, hybrid_score - 0.20)
 
             elif query_intent["is_definition"]:
                 if chunk_is_definition:

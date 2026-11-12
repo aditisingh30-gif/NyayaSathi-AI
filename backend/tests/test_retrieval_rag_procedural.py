@@ -501,3 +501,201 @@ def test_bare_section_35_query_returns_source_not_available(populated_vector_ser
     assert len(resp.citations) == 0, f"Expected 0 citations for ambiguous bare query, got {resp.citations}"
     assert "Source Not Available in Knowledge Base" in resp.answer
     assert resp.confidence_score == 0.0
+
+
+def test_multiple_provision_numbers_extraction():
+    """
+    Verify extraction of multiple provision numbers:
+    - Section 35
+    - Sections 35, 36 and 38
+    - Sections 35, 36, 38 and 39
+    """
+    from app.services.vector_service import extract_target_provision_details
+
+    # Single
+    p1, n1 = extract_target_provision_details("What is Section 35 of the CPA?")
+    assert p1 == "section"
+    assert n1 == {"35"}
+
+    # Three provisions
+    p2, n2 = extract_target_provision_details(
+        "What is the procedure for filing a consumer complaint under Section 35 of the Consumer Protection Act, 2019? Explain Sections 35, 36 and 38 separately."
+    )
+    assert p2 == "section"
+    assert n2 == {"35", "36", "38"}
+
+    # Four provisions
+    p3, n3 = extract_target_provision_details("Explain Sections 35, 36, 38 and 39.")
+    assert p3 == "section"
+    assert n3 == {"35", "36", "38", "39"}
+
+    # Constitution Article
+    p4, n4 = extract_target_provision_details("What is Article 35 of the Constitution of India?")
+    assert p4 == "article"
+    assert n4 == {"35"}
+
+
+def test_realistic_uploaded_cpa_metadata_retrieval(tmp_path):
+    """
+    REGRESSION TEST with realistic uploaded-document metadata:
+    Simulates the exact conditions of the live Render failure:
+    - document_title = '2606GI.p65' (embedded Gazette PageMaker metadata)
+    - filename = 'Consumer Protection Act, 2019.pdf'
+    - category = 'Legal Document' (generic default assigned during upload/recovery)
+    - Gazette subsection format: '35. (1) ...', '36. (1) ...', '38. (1) ...'
+    - Exact PDF page numbers: Page 18 (Sections 35, 36), Page 19 (Section 38)
+    - Constitution of India (including Article 35 on page 51 and Article 21 on page 42) indexed concurrently.
+
+    Verifies:
+    1. Consumer complaint procedure retrieves Sections 35, 36 and 38.
+    2. Constitution Article 35 query retrieves ONLY Constitution Article 35.
+    3. Constitution Article 21 continues retrieving Constitution Article 21.
+    4. Unrelated query returns Source Not Available.
+    5. Bare ambiguous Section 35 returns Source Not Available.
+    """
+    persist_dir = str(tmp_path / "chroma_realistic_test")
+    vs = ChromaVectorService(persist_dir=persist_dir, collection_name="test_realistic_cpa")
+
+    # Realistic uploaded CPA chunks with legacy/raw Gazette metadata
+    realistic_cpa_meta = {
+        "doc_id": "doc_uploaded_cpa_live",
+        "title": "2606GI.p65",  # Raw PageMaker embedded title
+        "filename": "Consumer Protection Act, 2019.pdf",
+        "category": "Legal Document",  # Generic upload category
+        "num_pages": 40,
+    }
+    realistic_cpa_chunks = [
+        {
+            "chunk_id": "cpa_live_p18_s35",
+            "text": (
+                "35. (1) A complaint, in relation to any goods sold or delivered or agreed to be sold or "
+                "delivered or any service provided or agreed to be provided, may be filed with a District "
+                "Commission by— (a) the consumer; (b) any recognised consumer association; "
+                "(c) one or more consumers having the same interest; or (d) the Central Government, Central Authority or State Government. "
+                "Provided that the complaint under this sub-section may be filed electronically in such manner as may be prescribed. "
+                "(2) Every complaint filed under sub-section (1) shall be accompanied with such fee and payable in such manner, including electronic form."
+            ),
+            "section_header": "Section 35",
+            "article_number": "35",
+            "page_number": 18,
+            "is_schedule": False,
+            "document_title": "2606GI.p65",
+            "filename": "Consumer Protection Act, 2019.pdf",
+            "category": "Legal Document",
+        },
+        {
+            "chunk_id": "cpa_live_p18_s36",
+            "text": (
+                "36. (1) Every proceeding before the District Commission shall be conducted by the President of that Commission "
+                "and atleast one member thereof, sitting together. (2) On receipt of a complaint made under section 35, the District Commission "
+                "may, by order, admit the complaint for being proceeded with or reject the same: Provided that a complaint shall not be rejected "
+                "unless an opportunity of being heard is given to the complainant: Provided further that the admissibility of the complaint shall "
+                "ordinarily be decided within twenty-one days from the date on which the complaint was filed. "
+                "(3) Where the District Commission does not decide the issue of admissibility within twenty-one days, it shall be deemed to have been admitted."
+            ),
+            "section_header": "Section 36",
+            "article_number": "36",
+            "page_number": 18,
+            "is_schedule": False,
+            "document_title": "2606GI.p65",
+            "filename": "Consumer Protection Act, 2019.pdf",
+            "category": "Legal Document",
+        },
+        {
+            "chunk_id": "cpa_live_p19_s38",
+            "text": (
+                "38. (1) The District Commission shall, on admission of a complaint, refer a copy of the admitted complaint within "
+                "twenty-one days from the date of its admission to the opposite party, directing him to give his version of the case "
+                "within a period of thirty days, extendable by fifteen days. (2) Where the opposite party denies or disputes allegations, "
+                "the District Commission shall proceed to settle the consumer dispute."
+            ),
+            "section_header": "Section 38",
+            "article_number": "38",
+            "page_number": 19,
+            "is_schedule": False,
+            "document_title": "2606GI.p65",
+            "filename": "Consumer Protection Act, 2019.pdf",
+            "category": "Legal Document",
+        },
+    ]
+    vs.add_document_chunks(realistic_cpa_meta, realistic_cpa_chunks)
+
+    # Add Constitution chunks (including Article 35 and Article 21)
+    const_meta = {
+        "doc_id": "doc_const_live",
+        "title": "Constitution of India_ 20 MAY 2026 (final).pdf",
+        "filename": "Constitution of India.pdf",
+        "category": "Legal Document",
+        "num_pages": 402,
+    }
+    const_chunks = [
+        {
+            "chunk_id": "const_art21_live",
+            "text": "21. Protection of life and personal liberty.—No person shall be deprived of his life or personal liberty except according to procedure established by law.",
+            "section_header": "Article 21. Protection of life and personal liberty",
+            "article_number": "21",
+            "page_number": 42,
+            "is_schedule": False,
+            "document_title": "Constitution of India_ 20 MAY 2026 (final).pdf",
+            "filename": "Constitution of India.pdf",
+            "category": "Legal Document",
+        },
+        {
+            "chunk_id": "const_art35_live",
+            "text": "35. Legislation to give effect to the provisions of this Part.—Notwithstanding anything in this Constitution,—(a) Parliament shall have power to make laws with respect to any of the matters under article 16, article 32, article 33 and article 34.",
+            "section_header": "Article 35. Legislation to give effect to the provisions of this Part",
+            "article_number": "35",
+            "page_number": 51,
+            "is_schedule": False,
+            "document_title": "Constitution of India_ 20 MAY 2026 (final).pdf",
+            "filename": "Constitution of India.pdf",
+            "category": "Legal Document",
+        },
+    ]
+    vs.add_document_chunks(const_meta, const_chunks)
+
+    rag = RAGLegalService(v_service=vs)
+
+    # 1. Test the exact live question:
+    live_q = "What is the procedure for filing a consumer complaint under Section 35 of the Consumer Protection Act, 2019? Explain Sections 35, 36 and 38 separately."
+    resp1 = rag.query(QueryRequest(question=live_q))
+    assert resp1.confidence_score > 0.0
+    assert len(resp1.citations) >= 3
+    cit_sections = [c.section_header for c in resp1.citations]
+    assert any("35" in s for s in cit_sections), f"Section 35 missing in {cit_sections}"
+    assert any("36" in s for s in cit_sections), f"Section 36 missing in {cit_sections}"
+    assert any("38" in s for s in cit_sections), f"Section 38 missing in {cit_sections}"
+    for c in resp1.citations:
+        assert "Constitution" not in c.document_title
+        assert not c.section_header.startswith("Article")
+
+    # 2. Test Constitution Article 35 query:
+    const_q = "What is Article 35 of the Constitution of India?"
+    resp2 = rag.query(QueryRequest(question=const_q))
+    assert resp2.confidence_score > 0.0
+    assert len(resp2.citations) >= 1
+    for c in resp2.citations:
+        assert "Constitution" in c.document_title
+        assert c.section_header.startswith("Article 35")
+        assert c.page_number == 51
+
+    # 3. Test Constitution Article 21 query:
+    art21_q = "What is Article 21 of the Constitution of India?"
+    resp3 = rag.query(QueryRequest(question=art21_q))
+    assert resp3.confidence_score > 0.0
+    assert len(resp3.citations) >= 1
+    assert any(c.section_header.startswith("Article 21") for c in resp3.citations)
+
+    # 4. Test unrelated query:
+    unrelated_q = "What is the procedure for registering a nuclear submarine in India?"
+    resp4 = rag.query(QueryRequest(question=unrelated_q))
+    assert resp4.confidence_score == 0.0
+    assert len(resp4.citations) == 0
+    assert "Source Not Available in Knowledge Base" in resp4.answer
+
+    # 5. Test bare ambiguous Section 35 query:
+    bare_q = "What does Section 35 say?"
+    resp5 = rag.query(QueryRequest(question=bare_q))
+    assert resp5.confidence_score == 0.0
+    assert len(resp5.citations) == 0
+    assert "Source Not Available in Knowledge Base" in resp5.answer

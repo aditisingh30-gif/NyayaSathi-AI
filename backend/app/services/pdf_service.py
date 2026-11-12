@@ -32,9 +32,11 @@ LEGAL_HEADER_PATTERNS = [
 # e.g., "21. Protection of life and personal liberty.—"
 # e.g., "2[21A. Right to education.—"
 # e.g., "Article 21. Protection of life..."
-# Captures: group(1)=number (e.g. '20', '21', '21A', '22'), group(2)=title
+# e.g., "35. (1) A complaint, in relation to..." (Gazette statutory format)
+# e.g., "36. (1) Every proceeding..."
+# e.g., "Section 35. Manner in which complaint shall be made"
 CONSTITUTION_ARTICLE_RE = re.compile(
-    r"(?m)^[ \t]*(?:\d+\[)?(?:Article\s+)?(\d{1,3}[A-Z]?)\.\s+([A-Z][A-Za-z ,\[\]()0-9]{3,100}?)\.?[—\-]"
+    r"(?m)^[ \t]*(?:\d+\[)?(?:(?:Section|Article|Clause)\s+)?(\d{1,3}[A-Za-z]?)\.\s*(?:([A-Z][A-Za-z ,\[\]()0-9]{2,100}?)\.?[—\-]|\(([0-9a-zA-Z]+)\)|([A-Z][A-Za-z ,\[\]()0-9]{2,100}))"
 )
 
 # Schedules / Appendix headings — to tag chunks as non-mainbody
@@ -108,9 +110,20 @@ class PDFProcessingService:
 
         try:
             num_pages = len(doc)
-            title = doc.metadata.get("title") if doc.metadata else None
-            if not title or len(title.strip()) < 3:
+            raw_title = doc.metadata.get("title") if doc.metadata else None
+            # Reject raw printer/software artifacts (e.g., '2606GI.p65', 'word.docx', 'untitled')
+            # and fall back to the clean uploaded filename stem
+            is_artifact = (
+                not raw_title or len(raw_title.strip()) < 3
+                or any(raw_title.lower().endswith(ext) for ext in (".p65", ".docx", ".pdf", ".qxd", ".txt", ".rtf"))
+                or raw_title.lower().startswith("microsoft word")
+                or raw_title.lower() in ("untitled", "default", "document")
+                or bool(re.match(r"^\d+[a-zA-Z0-9_\-\.]*$", raw_title.strip()))
+            )
+            if is_artifact:
                 title = Path(filename).stem.replace("_", " ").title()
+            else:
+                title = raw_title.strip()
 
             for page_index in range(num_pages):
                 page = doc[page_index]
@@ -320,7 +333,9 @@ class PDFProcessingService:
 
         for i, m in enumerate(matches):
             art_num = m.group(1).lower()          # "20", "21", "21a", "22", "35"
-            art_title = m.group(2).strip()        # "Protection of life and personal liberty"
+            title_with_dash = m.group(2)
+            title_bare = m.group(4)
+            art_title = (title_with_dash or title_bare or "").strip()
 
             # Inspect the exact matched prefix text to preserve statutory terminology
             match_str = m.group(0).lower()
@@ -333,7 +348,10 @@ class PDFProcessingService:
             else:
                 prefix = default_prefix
 
-            art_header = f"{prefix} {m.group(1)}. {art_title}"
+            if art_title:
+                art_header = f"{prefix} {m.group(1)}. {art_title}"
+            else:
+                art_header = f"{prefix} {m.group(1)}"
 
             # Text runs from match start to next match start (or end of page)
             start = m.start()
