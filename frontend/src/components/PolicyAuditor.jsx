@@ -52,13 +52,13 @@ export default function PolicyAuditor({ documents = [] }) {
     <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
       {/* Control Card */}
       <div className="card">
-        <div className="card-header">
+        <div className="card-header policy-card-header">
           <div className="card-title">
             <ShieldCheck size={20} color="var(--gold-accent)" />
             <span>Statutory Policy & Regulatory Compliance Auditor</span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <div className="policy-framework-select" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Target Regulatory Framework:</span>
             <select
               value={framework}
@@ -80,7 +80,7 @@ export default function PolicyAuditor({ documents = [] }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem", marginBottom: "1rem" }}>
+        <div className="policy-form-grid">
           <div>
             <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.35rem" }}>
               Audit from Document Library (Optional)
@@ -111,7 +111,7 @@ export default function PolicyAuditor({ documents = [] }) {
           </div>
 
           <div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.35rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.35rem", flexWrap: "wrap", gap: "0.4rem" }}>
               <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)" }}>
                 Policy / Clause Text to Audit
               </label>
@@ -167,39 +167,37 @@ export default function PolicyAuditor({ documents = [] }) {
       {/* Audit Findings */}
       {result && (
         <div className="card">
-          <div className="card-header">
-            <div>
-              <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#FFFFFF" }}>{result.title}</h3>
-              <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
-                {result.executive_summary}
-              </p>
-              {result.commencement_notice && (
-                <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", background: "rgba(59, 130, 246, 0.1)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: "6px", fontSize: "0.74rem", color: "#93C5FD" }}>
-                  ⚖️ {result.commencement_notice}
-                </div>
-              )}
-            </div>
-
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: "1.8rem", fontWeight: 800, color: result.overall_compliance_percentage >= 75 ? "#10B981" : result.overall_compliance_percentage >= 50 ? "#F59E0B" : "#EF4444" }}>
-                {result.overall_compliance_percentage}%
+        <div className="card-header policy-results-header">
+          <div>
+            <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#FFFFFF" }}>{result.title}</h3>
+            <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+              {result.executive_summary}
+            </p>
+            {result.commencement_notice && (
+              <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", background: "rgba(59, 130, 246, 0.1)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: "6px", fontSize: "0.74rem", color: "#93C5FD" }}>
+                ⚖️ {result.commencement_notice}
               </div>
-              <div style={{ fontSize: "0.72rem", color: "var(--text-dim)", textTransform: "uppercase" }}>Overall Score</div>
-            </div>
+            )}
           </div>
+
+          <div className="policy-score-box" style={{ textAlign: "right" }}>
+            <div style={{ fontSize: "1.8rem", fontWeight: 800, color: result.overall_compliance_percentage >= 75 ? "#10B981" : result.overall_compliance_percentage >= 50 ? "#F59E0B" : "#EF4444" }}>
+              {result.overall_compliance_percentage}%
+            </div>
+            <div style={{ fontSize: "0.72rem", color: "var(--text-dim)", textTransform: "uppercase" }}>Overall Score</div>
+          </div>
+        </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             {result.checks.map((c, idx) => (
               <div
                 key={idx}
+                className="policy-check-card"
                 style={{
                   background: "#0A1627",
                   border: "1px solid var(--navy-border)",
                   borderRadius: "8px",
-                  padding: "1rem",
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: "1rem"
+                  padding: "1rem"
                 }}
               >
                 <div>

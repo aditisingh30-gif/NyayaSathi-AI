@@ -89,16 +89,16 @@ export default function ChatInterface({ documents = [] }) {
       {/* Left Chat Window */}
       <div className="chat-main">
         {/* Chat Control Header */}
-        <div style={{ padding: "0.85rem 1.25rem", borderBottom: "1px solid var(--navy-border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(11,25,44,0.6)" }}>
+        <div className="chat-control-header">
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
             <Scale size={18} color="var(--gold-accent)" />
             <span style={{ fontSize: "0.88rem", fontWeight: 700 }}>Interactive Legal RAG Counsel</span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-            <BookOpen size={16} color="var(--text-muted)" />
+          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", width: "100%", maxWidth: "340px" }}>
+            <BookOpen size={16} color="var(--text-muted)" style={{ flexShrink: 0 }} />
             <select
-              style={{ background: "#081220", color: "#F1F5F9", border: "1px solid var(--navy-border)", padding: "0.35rem 0.75rem", borderRadius: "6px", fontSize: "0.8rem", outline: "none" }}
+              style={{ background: "#081220", color: "#F1F5F9", border: "1px solid var(--navy-border)", padding: "0.4rem 0.75rem", borderRadius: "6px", fontSize: "0.8rem", outline: "none", width: "100%" }}
               value={selectedDocId}
               onChange={(e) => setSelectedDocId(e.target.value)}
             >

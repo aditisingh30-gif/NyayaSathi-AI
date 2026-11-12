@@ -112,7 +112,7 @@ export default function DocumentManager({ documents = [], onRefresh }) {
           </div>
         )}
 
-        <form onSubmit={handleUpload} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "1rem", alignItems: "end" }}>
+        <form onSubmit={handleUpload} className="doc-upload-form">
           <div>
             <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.35rem" }}>
               Select Legal PDF Document *
@@ -184,7 +184,7 @@ export default function DocumentManager({ documents = [], onRefresh }) {
             </select>
           </div>
 
-          <button className="btn-primary" type="submit" disabled={uploading || !file}>
+          <button className="btn-primary doc-upload-btn" type="submit" disabled={uploading || !file}>
             <Upload size={16} />
             <span>{uploading ? "Extracting..." : "Ingest & Index"}</span>
           </button>

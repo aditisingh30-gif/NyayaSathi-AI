@@ -94,7 +94,7 @@ export default function ClauseAnalyzer() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: "1rem", marginBottom: "1rem" }}>
+        <div className="clause-form-grid">
           <div>
             <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: "0.35rem" }}>
               Contract Type
