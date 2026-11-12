@@ -235,8 +235,15 @@ class GeminiLegalService:
         Evaluates a contract clause for legal risks (indemnity, termination, liability, jurisdiction, IP).
         """
         system_instruction = (
-            "You are an expert Corporate & Contract Law Counsel. "
-            "Analyze the given contract clause for operational and legal risks. "
+            "You are an expert Corporate & Contract Law Counsel specializing in Indian Commercial Law and standard contracting practices. "
+            "Analyze the given contract clause for operational, financial, and legal risks. "
+            "Guidelines for evaluation:\n"
+            "1. Termination clauses: Distinguish balanced termination (mutual rights, reasonable written notice e.g. 30+ days, cure periods for breach) which is LOW/ACCEPTABLE, "
+            "from unilateral termination at will without notice or compensation which is HIGH or CRITICAL risk.\n"
+            "2. Notice & Cure periods: Absence of notice or absence of cure period for remediable breach must be flagged with appropriate risk level.\n"
+            "3. Indemnities: Uncapped, one-sided, or covering consequential losses should be evaluated as HIGH or CRITICAL.\n"
+            "4. Risk levels must strictly be one of: 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'.\n"
+            "5. The improved_clause_draft must specifically address the identified deficiencies in the clause without introducing unrelated or unsupported boilerplate.\n"
             "Output your findings as valid JSON with keys: "
             "'overall_risk_score' ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'), "
             "'risk_factors' (array of objects: 'risk_title', 'risk_level', 'risk_summary', 'legal_issue', 'potential_consequence', 'recommended_revision', 'statutory_reference'), "
@@ -251,7 +258,25 @@ class GeminiLegalService:
             # Clean markdown code block if present
             cleaned = re.sub(r"^```json\s*", "", raw.strip(), flags=re.MULTILINE)
             cleaned = re.sub(r"```$", "", cleaned.strip(), flags=re.MULTILINE)
-            return json.loads(cleaned)
+            parsed = json.loads(cleaned)
+
+            # Defensive Floor Guardrail: Compute baseline deterministic risk
+            # Ensures LLM output cannot downgrade an objectively severe risk (e.g. unilateral no-notice termination)
+            # below the floor established by commercial law rules.
+            baseline = self._fallback_clause_analyzer(clause_text, contract_type)
+            risk_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+            gemini_score = parsed.get("overall_risk_score", "LOW").upper()
+            baseline_score = baseline.get("overall_risk_score", "LOW").upper()
+
+            if risk_rank.get(baseline_score, 1) > risk_rank.get(gemini_score, 1):
+                parsed["overall_risk_score"] = baseline_score
+                # Ensure the critical risk factors from baseline are included if missing
+                existing_titles = {rf.get("risk_title", "") for rf in parsed.get("risk_factors", [])}
+                for rf in baseline.get("risk_factors", []):
+                    if rf.get("risk_level") in ["HIGH", "CRITICAL"] and rf.get("risk_title") not in existing_titles:
+                        parsed.setdefault("risk_factors", []).insert(0, rf)
+
+            return parsed
         except Exception:
             # Deterministic Contract Risk Analysis Engine
             return self._fallback_clause_analyzer(clause_text, contract_type)
@@ -260,85 +285,241 @@ class GeminiLegalService:
         """Built-in rule-based contract clause risk engine."""
         lower = clause_text.lower()
         risks = []
-        overall_risk = "LOW"
         notes = []
 
-        # Check Unilateral Termination
-        if "sole discretion" in lower or ("terminate" in lower and "immediate" in lower and "without cause" in lower):
-            overall_risk = "HIGH"
-            risks.append({
-                "risk_title": "Unilateral Immediate Termination Without Cause",
-                "risk_level": "HIGH",
-                "risk_summary": "One party holds disproportionate power to cancel the engagement without cure periods or mutual parity.",
-                "legal_issue": "Lack of reciprocal termination rights and absence of 30-day notice or cure periods.",
-                "potential_consequence": "Sudden business disruption, unrecoverable operational investments, and cash-flow shock.",
-                "recommended_revision": "Require mutual termination for convenience with at least 30 to 60 days written notice and a 30-day cure period for material breach.",
-                "statutory_reference": "Section 73 & 74, Indian Contract Act, 1872 (Breach and Damages)"
-            })
-            notes.append("Standard commercial practice requires bilateral termination notice periods.")
+        # Hierarchy helper
+        risk_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
-        # Check Uncapped Indemnity
-        if "indemnify" in lower and ("unlimited" in lower or "all losses" in lower or "indirect" in lower or "consequential" in lower):
-            overall_risk = "CRITICAL"
-            risks.append({
-                "risk_title": "Uncapped Broad-Form Indemnity",
-                "risk_level": "CRITICAL",
-                "risk_summary": "Indemnification is not capped to contract value and encompasses indirect/consequential damages.",
-                "legal_issue": "Disproportionate exposure exceeding total fees paid under the agreement.",
-                "potential_consequence": "Catastrophic financial liability in excess of contract value or insurance limits.",
-                "recommended_revision": "Cap aggregate indemnification to total fees paid in the preceding 12 months, and expressly exclude indirect, punitive, or consequential damages.",
-                "statutory_reference": "Section 124, Indian Contract Act, 1872 (Contract of Indemnity)"
-            })
-            notes.append("Always insist on an aggregate liability cap (Super Cap or 1x-2x Annual Contract Value).")
+        def elevate_risk(current: str, candidate: str) -> str:
+            return candidate if risk_rank.get(candidate, 1) > risk_rank.get(current, 1) else current
 
-        # Check Non-Compete Post Termination
-        if "not compete" in lower or "non-compete" in lower or "restraint" in lower:
-            overall_risk = "HIGH"
+        overall_risk = "LOW"
+
+        # ----------------- 1. TERMINATION ANALYSIS -----------------
+        is_termination_clause = any(w in lower for w in ["terminate", "termination", "cancel", "cancellation", "rescind"])
+        
+        if is_termination_clause:
+            # Check for unilateral / one-sided termination power
+            has_unilateral_party = bool(re.search(r"\b(company|client|customer|buyer|licensor|disclosing party|employer|vendor)\s+may\s+terminate\b", lower))
+            has_sole_discretion = any(w in lower for w in ["sole discretion", "at its discretion", "at its option", "at will"])
+            has_any_time = any(w in lower for w in ["at any time", "at whenever", "immediately and without"])
+            has_mutual = any(w in lower for w in ["either party", "both parties", "each party", "mutually"])
+
+            is_unilateral = (has_unilateral_party or has_sole_discretion or has_any_time) and not has_mutual
+
+            # Check for lack of notice
+            no_notice = any(w in lower for w in [
+                "without notice", "without prior notice", "without any prior notice",
+                "without written notice", "no notice", "immediate termination", "terminate immediately",
+                "without cause"
+            ]) or bool(re.search(r"\bterminate\b.*?\bimmediately\b", lower))
+            has_express_notice = bool(re.search(r"\b(?:\d+|thirty|sixty|ninety|fifteen|ten|forty-five)\b.*?\b(?:days?|business days?|months?)\b.*?\bnotice\b", lower)) or "prior written notice" in lower or "advance notice" in lower
+
+            # Check for lack of compensation / without liability
+            no_compensation = any(w in lower for w in [
+                "without compensation", "without liability", "no compensation", "no liability", "without penalty"
+            ]) or (any(w in lower for w in ["without", "no"]) and any(w in lower for w in ["compensation", "liability", "damages"]))
+
+            # Check for lack of cure period when termination is for breach
+            is_breach_termination = any(w in lower for w in ["breach", "default", "failure to perform"])
+            has_cure_period = bool(re.search(r"\b(?:cure|remedy)\b.*?\b\d+\b\s*(?:days?|business days?)", lower)) or any(w in lower for w in ["opportunity to cure", "period to cure", "cure period", "remedy such breach", "is not cured within"])
+
+            # Evaluate severity
+            if is_unilateral and (no_notice or has_any_time) and no_compensation:
+                overall_risk = elevate_risk(overall_risk, "CRITICAL")
+                risks.append({
+                    "risk_title": "Unilateral At-Will Termination Without Notice or Compensation",
+                    "risk_level": "CRITICAL",
+                    "risk_summary": "One party holds unconstrained power to cancel the agreement at any moment without advance notice or compensation for accrued obligations.",
+                    "legal_issue": "Grossly one-sided termination clause depriving the non-terminating party of reciprocity, reasonable reliance, and financial recourse.",
+                    "potential_consequence": "Sudden operational stoppage, unrecoverable capital or resource investments, and total lack of transition safeguards.",
+                    "recommended_revision": "Require mutual termination rights with a mandatory written notice period (e.g. 30 to 60 days) and compensation for work performed up to the termination date.",
+                    "statutory_reference": "Sections 39 & 73, Indian Contract Act, 1872 (Right to Rescind and Damages for Breach)"
+                })
+                notes.append("Unilateral at-will termination without notice exposes the dependent party to severe unmitigated commercial risk.")
+
+            elif is_unilateral and (no_notice or has_any_time):
+                overall_risk = elevate_risk(overall_risk, "HIGH")
+                risks.append({
+                    "risk_title": "Unilateral Immediate Termination Without Cause",
+                    "risk_level": "HIGH",
+                    "risk_summary": "One party retains the unilateral right to cancel without adequate notice, creating operational instability.",
+                    "legal_issue": "Lack of reciprocal termination rights and absence of reasonable advance notice.",
+                    "potential_consequence": "Unexpected cancellation of services with zero transition runway and potential cash-flow disruption.",
+                    "recommended_revision": "Convert to bilateral termination for convenience with a minimum 30 days prior written notice.",
+                    "statutory_reference": "Section 73, Indian Contract Act, 1872"
+                })
+                notes.append("Commercial contracts typically require bilateral termination rights with 30-60 days advance notice.")
+
+            elif is_unilateral and not has_mutual:
+                overall_risk = elevate_risk(overall_risk, "MEDIUM")
+                risks.append({
+                    "risk_title": "One-Sided Termination Rights",
+                    "risk_level": "MEDIUM",
+                    "risk_summary": "Termination rights are granted exclusively to one party rather than both parties on equal terms.",
+                    "legal_issue": "Asymmetric contractual balance of power.",
+                    "potential_consequence": "Inability for the counterparty to exit the agreement under equivalent circumstances.",
+                    "recommended_revision": "Make the termination rights reciprocal so that either party may exercise them under the same conditions.",
+                    "statutory_reference": "Principles of Mutuality, Indian Contract Act, 1872"
+                })
+
+            # Check breach termination missing cure period
+            if is_breach_termination and not has_cure_period and no_notice:
+                overall_risk = elevate_risk(overall_risk, "HIGH")
+                risks.append({
+                    "risk_title": "Immediate Termination for Breach Without Cure Period",
+                    "risk_level": "HIGH",
+                    "risk_summary": "Agreement allows instantaneous cancellation upon alleged breach without providing an opportunity to cure remediable defaults.",
+                    "legal_issue": "Absence of a standard 15 to 30-day notice-and-cure mechanism for curable breaches.",
+                    "potential_consequence": "Forfeiture or abrupt cancellation triggered by minor, inadvertent, or remediable technical non-compliance.",
+                    "recommended_revision": "Insert an explicit provision granting 30 days written notice to remedy any curable breach prior to termination taking effect.",
+                    "statutory_reference": "Section 55, Indian Contract Act, 1872"
+                })
+                notes.append("Best practice requires a notice-and-cure window before terminating for cause.")
+
+            elif is_breach_termination and not has_cure_period and not no_notice:
+                overall_risk = elevate_risk(overall_risk, "MEDIUM")
+                risks.append({
+                    "risk_title": "Absence of Express Cure Period for Material Breach",
+                    "risk_level": "MEDIUM",
+                    "risk_summary": "The clause does not specify a clear time window to cure a remediable breach before termination becomes final.",
+                    "legal_issue": "Ambiguity regarding whether curable defaults can be remedied prior to termination.",
+                    "potential_consequence": "Disputes regarding whether immediate termination was justified or premature.",
+                    "recommended_revision": "Specify a 15 to 30-day written notice and cure window for any curable breach.",
+                    "statutory_reference": "Section 39, Indian Contract Act, 1872"
+                })
+
+            # If balanced termination clause with mutual rights and clear notice
+            if has_mutual and (has_express_notice or has_cure_period) and not any(r["risk_level"] in ["HIGH", "CRITICAL"] for r in risks):
+                overall_risk = "LOW"
+                risks = [{
+                    "risk_title": "Balanced Bilateral Termination",
+                    "risk_level": "LOW",
+                    "risk_summary": "The clause provides mutual termination rights with express advance written notice and/or cure mechanics.",
+                    "legal_issue": "None detected; reciprocal and aligned with standard commercial practice.",
+                    "potential_consequence": "Standard commercial notice and orderly exit process.",
+                    "recommended_revision": "Retain clause as drafted; ensure operational teams track notice delivery requirements.",
+                    "statutory_reference": "Section 73, Indian Contract Act, 1872"
+                }]
+                notes = ["Termination rights appear mutual with reasonable advance notice."]
+
+        # ----------------- 2. INDEMNITY & LIABILITY ANALYSIS -----------------
+        has_indemnity = any(w in lower for w in ["indemnify", "indemnification", "hold harmless", "defend and hold"])
+        if has_indemnity:
+            is_unlimited = any(w in lower for w in ["unlimited", "without limit", "without limitation", "all losses", "any and all losses"])
+            covers_indirect = any(w in lower for w in ["indirect", "consequential", "punitive", "special damages", "incidental"])
+            is_one_sided_indemnity = bool(re.search(r"\b(vendor|contractor|service provider|licensee)\s+shall\s+indemnify\b", lower)) and "each party" not in lower
+
+            if is_unlimited or covers_indirect:
+                overall_risk = elevate_risk(overall_risk, "CRITICAL")
+                risks.append({
+                    "risk_title": "Uncapped Broad-Form Indemnity",
+                    "risk_level": "CRITICAL",
+                    "risk_summary": "Indemnification is not capped to contract value and encompasses indirect or consequential losses.",
+                    "legal_issue": "Disproportionate liability exposure exceeding contract value, potentially bypassing standard statutory remoteness of damage rules.",
+                    "potential_consequence": "Catastrophic, uninsurable financial liability far exceeding the financial benefit of the agreement.",
+                    "recommended_revision": "Cap aggregate indemnification to total fees paid/payable under the agreement, and expressly carve out consequential and indirect damages.",
+                    "statutory_reference": "Section 73 & Section 124, Indian Contract Act, 1872"
+                })
+                notes.append("Insist on an aggregate liability cap (e.g. 1x-2x Annual Contract Value) and exclude indirect damages.")
+            elif is_one_sided_indemnity:
+                overall_risk = elevate_risk(overall_risk, "MEDIUM")
+                risks.append({
+                    "risk_title": "Unilateral Indemnification Obligation",
+                    "risk_level": "MEDIUM",
+                    "risk_summary": "Indemnity obligation is imposed solely on one party without reciprocal protection.",
+                    "legal_issue": "Asymmetrical risk allocation.",
+                    "potential_consequence": "Unbalanced exposure for third-party claims.",
+                    "recommended_revision": "Negotiate mutual indemnification limited to third-party claims arising from gross negligence, willful misconduct, or IP infringement.",
+                    "statutory_reference": "Section 124, Indian Contract Act, 1872"
+                })
+
+        # ----------------- 3. RESTRAINT OF TRADE (NON-COMPETE) -----------------
+        if any(w in lower for w in ["not compete", "non-compete", "restraint of trade", "shall not engage in any competing"]):
+            overall_risk = elevate_risk(overall_risk, "HIGH")
             risks.append({
                 "risk_title": "Post-Termination Non-Compete Restraint",
                 "risk_level": "HIGH",
-                "risk_summary": "Restricts trade or commercial activity post termination of relationship.",
-                "legal_issue": "Agreements in restraint of trade are void under Section 27 of the Indian Contract Act, 1872.",
-                "potential_consequence": "Clause is legally unenforceable in Indian courts and creates spurious litigation risk.",
-                "recommended_revision": "Narrow scope to reasonable protection of trade secrets and confidentiality rather than blanket prohibition of trade.",
+                "risk_summary": "Imposes restrictions on commercial trade or professional activity following contract termination.",
+                "legal_issue": "Agreements in restraint of trade or profession are void under Section 27 of the Indian Contract Act, 1872.",
+                "potential_consequence": "The covenant is legally unenforceable in Indian courts and exposes parties to unnecessary litigation.",
+                "recommended_revision": "Replace blanket non-compete with enforceable non-solicitation of clients/employees and strict non-disclosure of confidential information.",
                 "statutory_reference": "Section 27, Indian Contract Act, 1872 (Agreement in Restraint of Trade Void)"
             })
+            notes.append("Under Indian law, post-contractual non-compete restrictions are void ab initio under Section 27.")
 
-        # Check Liquidated Damages / Penalties
-        if "penalty" in lower or "forfeit" in lower or ("liquidated damages" in lower and "excessive" in lower):
-            overall_risk = "MEDIUM" if overall_risk == "LOW" else overall_risk
+        # ----------------- 4. PUNITIVE LIQUIDATED DAMAGES / PENALTIES -----------------
+        if any(w in lower for w in ["penalty", "forfeit all", "punitive damages"]) or ("liquidated damages" in lower and any(w in lower for w in ["excessive", "unreasonable", "regardless of actual"])):
+            overall_risk = elevate_risk(overall_risk, "MEDIUM")
             risks.append({
-                "risk_title": "Punitive Liquidated Damages",
+                "risk_title": "Punitive Liquidated Damages or Penalty Stipulation",
                 "risk_level": "MEDIUM",
-                "risk_summary": "Pre-stipulated damages may be deemed punitive rather than genuine pre-estimates of loss.",
-                "legal_issue": "Indian courts only enforce reasonable compensation not exceeding the amount named.",
-                "potential_consequence": "Litigation delays to prove actual loss incurred under Section 74.",
-                "recommended_revision": "Clarify that liquidated damages represent a genuine pre-estimate of loss and not a penalty.",
+                "risk_summary": "Pre-stipulated damages appear punitive rather than a genuine pre-estimate of anticipated loss.",
+                "legal_issue": "Indian courts do not enforce penalties; under Section 74, only reasonable compensation up to the named amount is recoverable.",
+                "potential_consequence": "Litigation delays requiring judicial assessment to prove actual losses incurred.",
+                "recommended_revision": "Explicitly state that liquidated damages represent a genuine pre-estimate of loss and not a penalty.",
                 "statutory_reference": "Section 74, Indian Contract Act, 1872 (Compensation for Breach of Contract)"
             })
 
-        # If no major flags caught, provide general baseline check
+        # ----------------- 5. UNFAIR EXCLUSION OF LIABILITY -----------------
+        if any(w in lower for w in ["sole remedy", "exclusive remedy"]) and any(w in lower for w in ["no liability whatsoever", "disclaims all liability"]):
+            overall_risk = elevate_risk(overall_risk, "HIGH")
+            risks.append({
+                "risk_title": "Total Exclusion of Liability / Illusory Remedy",
+                "risk_level": "HIGH",
+                "risk_summary": "One party disclaims virtually all liability, rendering remedies illusory.",
+                "legal_issue": "Unconscionable exclusion of fundamental contractual obligations.",
+                "potential_consequence": "Inability to recover damages in the event of gross negligence or material failure.",
+                "recommended_revision": "Ensure exclusions do not apply to gross negligence, willful misconduct, breach of confidentiality, or statutory liabilities.",
+                "statutory_reference": "Section 73, Indian Contract Act, 1872"
+            })
+
+        # ----------------- 6. BASELINE CHECK IF NO RISKS FOUND -----------------
         if not risks:
             risks.append({
                 "risk_title": "Standard Commercial Exposure",
                 "risk_level": "LOW",
-                "risk_summary": "Clause appears structured within standard commercial parameters.",
-                "legal_issue": "Ensure terms align with bilateral representations and warranties.",
-                "potential_consequence": "Low direct exposure; verify governing law and jurisdiction clauses.",
-                "recommended_revision": "Ensure defined terms match schedule definitions and dispute resolution procedures.",
+                "risk_summary": "Clause appears structured within customary commercial parameters without obvious unilateral or unconscionable covenants.",
+                "legal_issue": "Verify terms align with bilateral representations and overall agreement schedules.",
+                "potential_consequence": "Low direct legal risk; ensure governing law and dispute escalation clauses are properly cross-referenced.",
+                "recommended_revision": "Retain language with standard cross-referencing to definitions and dispute resolution procedures.",
                 "statutory_reference": "Indian Contract Act, 1872"
             })
-            notes.append("No immediate unconscionable or void provisions detected.")
+            notes.append("No immediate unconscionable, void, or severe asymmetrical provisions detected.")
 
-        # Suggest improved draft
-        improved_draft = (
-            f"MUTUALLY REVISED DRAFT:\n"
-            f"\"{clause_text.strip()}\n\n"
-            f"PROVIDED ALWAYS that each party's aggregate liability under this clause shall be limited to the total fees "
-            f"actually received under this Agreement during the twelve (12) months preceding the claim. "
-            f"Neither party shall be liable for special, indirect, or consequential damages. Any termination shall require thirty (30) "
-            f"business days prior written notice with opportunity to cure.\""
-        )
+        # ----------------- 7. EVIDENCE-TAILORED REVISED DRAFT -----------------
+        # Generate targeted revision based on the actual identified risks
+        revision_parts = []
+        if any("termination" in r["risk_title"].lower() for r in risks):
+            if any(r["risk_level"] in ["HIGH", "CRITICAL"] for r in risks):
+                revision_parts.append(
+                    "Either party may terminate this Agreement for convenience upon providing at least thirty (30) days prior written notice to the other party. "
+                    "Upon any such termination, the Customer shall compensate the Vendor for all authorized services performed and reimbursable expenses incurred up to the effective termination date. "
+                    "In the event of a material breach, the non-defaulting party may terminate this Agreement only after giving thirty (30) days prior written notice specifying the breach, "
+                    "provided the defaulting party fails to cure such breach within said thirty (30) day period."
+                )
+        if any("indemnity" in r["risk_title"].lower() for r in risks):
+            revision_parts.append(
+                "Each party's aggregate indemnification and liability under this clause shall be limited to the total fees paid or payable under this Agreement in the twelve (12) months preceding the claim. "
+                "Neither party shall be liable for any indirect, special, punitive, or consequential damages."
+            )
+        if any("non-compete" in r["risk_title"].lower() for r in risks):
+            revision_parts.append(
+                "During the term of this Agreement and for twelve (12) months thereafter, neither party shall solicit the key employees of the other party without prior written consent. "
+                "Confidential information shall be maintained strictly in accordance with the confidentiality provisions herein."
+            )
+
+        if revision_parts:
+            improved_draft = (
+                f"RECOMMENDED REVISED DRAFT:\n"
+                f"\"{ ' '.join(revision_parts) }\""
+            )
+        else:
+            improved_draft = (
+                f"RECOMMENDED REVISED DRAFT:\n"
+                f"\"{clause_text.strip()}\n\n"
+                f"[Confirmed: Language is commercially standard and bilateral; ensure defined terms and notice delivery methods align with the Master Agreement.]\""
+            )
 
         return {
             "overall_risk_score": overall_risk,
