@@ -126,7 +126,11 @@ class GeminiLegalService:
             "6. Do NOT hallucinate statutory sections or case law not present in the sources.\n"
             "7. Maintain an objective, professional judicial tone.\n"
             "8. NEVER label a statutory section as an article. Statutory Acts (e.g., Consumer Protection Act, Digital Personal Data Protection Act, Indian Contract Act, Bharatiya Nyaya Sanhita) use 'Section', the Constitution of India uses 'Article', and commercial agreements use 'Clause'. Preserve the precise statutory terminology from the retrieved source.\n"
-            "9. NEVER claim a provision directly answers a question unless its actual retrieved text directly supports that claim. If a retrieved provision provides background or definitions rather than the procedure or answer sought, explicitly explain its exact scope and limitations."
+            "9. NEVER claim a provision directly answers a question unless its actual retrieved text directly supports that claim. If a retrieved provision provides background or definitions rather than the procedure or answer sought, explicitly explain its exact scope and limitations.\n"
+            "10. STRICT SECTION ATTRIBUTION: Every legal statement, requirement, and timeline must cite its exact section number and source page. Do NOT attribute a provision's requirements to a different section. Specifically under the Consumer Protection Act, 2019:\n"
+            "   - Section 35 governs the manner of filing/making a complaint, eligible complainants, electronic filing (e-Daakhil), and prescribed fees.\n"
+            "   - Section 36 governs proceedings before the District Commission, admissibility determination, the 21-day timeline to decide admissibility, opportunity of being heard before rejection, and deemed admission if not decided within 21 days.\n"
+            "   - Section 38 governs the procedure after admission of the complaint, reference of copy to opposite party within 21 days of admission, and the 30-day (extendable by 15 days) timeline to file a written version."
         )
 
         user_prompt = (
@@ -205,17 +209,17 @@ class GeminiLegalService:
                 evidence_points.append(
                     "- **Damages for Breach**: Entitles the non-defaulting party to compensation for natural loss, excluding indirect or remote damages."
                 )
-            if "district commission" in clean_lower and ("filed" in clean_lower or "complaint" in clean_lower):
+            if "district commission" in clean_lower and ("filed" in clean_lower or "manner" in clean_lower) and "section 35" in sec.lower():
                 evidence_points.append(
-                    "- **Manner of Filing Complaint (Section 35)**: A consumer, recognised consumer association, group of consumers with common interest, or government may file a complaint with the District Commission."
+                    f"- **Manner of Filing ({sec}, {c_doc}, Page {c_page})**: Authorizes a consumer, recognised consumer association, group of consumers with common interest, or government to file a complaint before the District Commission, accompanied by prescribed fees and submitted in person or electronically via e-Daakhil."
                 )
-            if "electronic filing" in clean_lower or "e-daakhil" in clean_lower:
+            if ("admissibility" in clean_lower or "twenty-one days" in clean_lower or "proceedings" in clean_lower) and "section 36" in sec.lower():
                 evidence_points.append(
-                    "- **Electronic Filing & Prescribed Fees**: Complaints may be submitted electronically (e-Daakhil) accompanied by the prescribed fee."
+                    f"- **Admissibility & 21-Day Decision Timeline ({sec}, {c_doc}, Page {c_page})**: Governs proceedings before the District Commission; mandates that admissibility of the complaint be decided ordinarily within 21 days from the date of filing, provides for deemed admission if not decided within 21 days, and requires giving the complainant an opportunity of being heard prior to rejection."
                 )
-            if "twenty-one days" in clean_lower and ("admissibility" in clean_lower or "admit" in clean_lower):
+            if ("admission of a complaint" in clean_lower or "opposite party" in clean_lower or "procedure on admission" in clean_lower) and "section 38" in sec.lower():
                 evidence_points.append(
-                    "- **Admissibility Timeline**: The District Commission ordinarily decides the admissibility of the complaint within 21 days from the date of filing."
+                    f"- **Procedure After Admission & Opposite Party Notice ({sec}, {c_doc}, Page {c_page})**: Governs post-admission procedure; requires referring a copy of the admitted complaint within 21 days of admission to the opposite party, directing them to give their version of the case within 30 days (extendable by 15 days), and proceeding to settle the consumer dispute."
                 )
             if "central consumer protection authority" in clean_lower or "ccpa" in clean_lower:
                 evidence_points.append(
@@ -237,12 +241,31 @@ class GeminiLegalService:
                 "- **Scope of Evidence**: Additional case law, judicial precedents, or administrative guidelines are not present in the indexed text; legal interpretation is strictly bounded by the retrieved provision."
             )
 
-        # Build evidence-grounded summary without claiming unsupported provisions answer the query
+        # Build evidence-grounded summary with strict section attribution
         q_lower = question.lower()
         top_sec_lower = section.lower()
         top_text_lower = top_chunk.get("text", "").lower()
 
-        if any(w in q_lower for w in ("procedure", "manner", "filing", "how to file")) and ("manner" in top_sec_lower or "procedure" in top_sec_lower or "filed" in top_text_lower):
+        has_sec35 = any("section 35" in c.get("section_header", "").lower() for c in chunks)
+        has_sec36 = any("section 36" in c.get("section_header", "").lower() for c in chunks)
+        has_sec38 = any("section 38" in c.get("section_header", "").lower() for c in chunks)
+
+        if has_sec35 or has_sec36 or has_sec38:
+            stages = []
+            if has_sec35:
+                c35 = next(c for c in chunks if "section 35" in c.get("section_header", "").lower())
+                stages.append(f"**Section 35** ({c35.get('document_title')}, Page {c35.get('page_number', 1)}): Governs the manner of filing a complaint (eligible complainants, prescribed fees, electronic filing via e-Daakhil).")
+            if has_sec36:
+                c36 = next(c for c in chunks if "section 36" in c.get("section_header", "").lower())
+                stages.append(f"**Section 36** ({c36.get('document_title')}, Page {c36.get('page_number', 1)}): Governs admissibility proceedings before the District Commission, requiring admissibility to be decided ordinarily within 21 days of filing (with deemed admission if not decided within that period).")
+            if has_sec38:
+                c38 = next(c for c in chunks if "section 38" in c.get("section_header", "").lower())
+                stages.append(f"**Section 38** ({c38.get('document_title')}, Page {c38.get('page_number', 1)}): Governs the procedure after admission, requiring notice to the opposite party within 21 days directing them to file their written version within 30 days (extendable by 15 days).")
+            summary_statement = (
+                f"Under the **Consumer Protection Act, 2019**, the complaint procedure comprises three distinct statutory stages:\n"
+                + "\n".join(f"- {s}" for s in stages)
+            )
+        elif any(w in q_lower for w in ("procedure", "manner", "filing", "how to file")) and ("manner" in top_sec_lower or "procedure" in top_sec_lower or "filed" in top_text_lower):
             summary_statement = f"Under **{section}** (Page {page}) of **{doc_title}**, the statute governs the procedure and manner in which a complaint shall be filed before the District Commission."
         elif "definition" in q_lower or "define" in q_lower or "meaning" in q_lower:
             summary_statement = f"Under **{section}** (Page {page}) of **{doc_title}**, the statutory definitions establish the legal meaning of terms relevant to your query."

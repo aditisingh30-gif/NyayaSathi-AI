@@ -41,8 +41,12 @@ class RAGLegalService:
         for term, legal_kw in LEGAL_EXPANSIONS.items():
             if term == "consumer":
                 if "consumer" in lower_q:
-                    if any(w in lower_q for w in ("procedure", "manner", "filing", "file", "how to", "make a complaint", "steps", "admissibility")):
-                        expansions.append("Consumer Protection Act 2019 Section 35 manner in which complaint shall be made District Commission filing electronic fee e-daakhil")
+                    if any(w in lower_q for w in ("after admission", "on admission", "opposite party")):
+                        expansions.append("Consumer Protection Act 2019 Section 38 procedure on admission opposite party notice twenty-one days thirty days")
+                    elif any(w in lower_q for w in ("admissibility", "twenty-one days", "21 days", "admit")):
+                        expansions.append("Consumer Protection Act 2019 Section 36 admissibility within twenty-one days deemed admission proceedings before District Commission")
+                    elif any(w in lower_q for w in ("procedure", "manner", "filing", "file", "how to", "make a complaint", "steps")):
+                        expansions.append("Consumer Protection Act 2019 Section 35 manner in which complaint shall be made Section 36 admissibility within twenty-one days Section 38 procedure on admission District Commission electronic fee e-daakhil")
                     elif any(w in lower_q for w in ("definition", "define", "meaning", "who is", "what is a consumer", "what is a complaint")):
                         expansions.append("Consumer Protection Act 2019 Section 2 definitions consumer complaint complainant deficiency unfair trade practice")
                     elif any(w in lower_q for w in ("central authority", "ccpa", "regulator")):

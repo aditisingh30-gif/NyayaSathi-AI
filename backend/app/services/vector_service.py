@@ -71,7 +71,26 @@ def detect_legal_intent(query_str: str) -> Dict[str, bool]:
 
     # Procedural intent: filing, procedure, manner, steps, where to file, how to complain
     is_procedural = bool(re.search(
-        r"\b(procedure|manner|filing|file|how\s+to\s+file|how\s+to\s+make|make\s+a\s+complaint|how\s+to\s+complain|steps|process|e-daakhil|prescribed\s+fee|admissibility|where\s+to\s+file)\b",
+        r"\b(procedure|manner|filing|file|how\s+to\s+file|how\s+to\s+make|make\s+a\s+complaint|how\s+to\s+complain|steps|process|e-daakhil|prescribed\s+fee|admissibility|admission|where\s+to\s+file)\b",
+        q
+    ))
+
+    # Fine-grained procedural stages:
+    # 1. Manner of filing (Section 35)
+    is_filing_manner = bool(re.search(
+        r"\b(manner\s+in\s+which|manner\s+of\s+filing|how\s+to\s+file|who\s+can\s+file|who\s+may\s+file|prescribed\s+fee|e-daakhil|electronic\s+filing|make\s+a\s+complaint)\b",
+        q
+    ))
+
+    # 2. Admissibility and 21-day timeline (Section 36)
+    is_admissibility = bool(re.search(
+        r"\b(admissibility|twenty-one\s+days|21\s+days|deemed\s+admitted|deemed\s+admission|admit\s+the\s+complaint|reject\s+the\s+same|opportunity\s+of\s+being\s+heard|admitted\s+within)\b",
+        q
+    ))
+
+    # 3. Post-admission procedure & opposite party notice/reply (Section 38)
+    is_post_admission = bool(re.search(
+        r"\b(after\s+admission|procedure\s+on\s+admission|post\s+admission|opposite\s+party|thirty\s+days|30\s+days|version\s+of\s+the\s+case|refer\s+a\s+copy|settle\s+the\s+consumer\s+dispute)\b",
         q
     ))
 
@@ -89,6 +108,9 @@ def detect_legal_intent(query_str: str) -> Dict[str, bool]:
 
     return {
         "is_procedural": is_procedural,
+        "is_filing_manner": is_filing_manner,
+        "is_admissibility": is_admissibility,
+        "is_post_admission": is_post_admission,
         "is_definition": is_definition,
         "is_authority": is_authority,
     }
@@ -397,8 +419,8 @@ class ChromaVectorService:
 
             # 7. Intent-aware semantic reranking
             chunk_is_procedural = (
-                any(p in chunk_sec_header for p in ("manner", "procedure", "proceedings", "filing", "admission of complaint"))
-                or any(p in chunk_text_lower for p in ("manner in which complaint shall be made", "may be filed with a district commission", "electronic filing of complaints", "e-daakhil", "accompanied with such fee", "admissibility of the complaint"))
+                any(p in chunk_sec_header for p in ("manner", "procedure", "proceedings", "filing", "admission"))
+                or any(p in chunk_text_lower for p in ("manner in which complaint shall be made", "may be filed with a district commission", "electronic filing of complaints", "e-daakhil", "accompanied with such fee", "admissibility of the complaint", "refer a copy of the admitted complaint", "opposite party"))
             )
             chunk_is_definition = (
                 "definition" in chunk_sec_header
@@ -413,11 +435,29 @@ class ChromaVectorService:
                 or "establishment of central consumer protection authority" in chunk_text_lower
             )
 
+            # Section-specific markers for Consumer Protection Act
+            is_sec35 = chunk_article_num == "35" or "section 35" in chunk_sec_header or "manner in which complaint shall be made" in chunk_sec_header
+            is_sec36 = chunk_article_num == "36" or "section 36" in chunk_sec_header or "proceedings before district commission" in chunk_sec_header or "admissibility" in chunk_text_lower
+            is_sec38 = chunk_article_num == "38" or "section 38" in chunk_sec_header or "procedure on admission" in chunk_sec_header or "opposite party" in chunk_text_lower
+
             if query_intent["is_procedural"]:
                 if chunk_is_procedural:
                     hybrid_score = min(1.0, hybrid_score + 0.35)
-                    if "manner in which complaint shall be made" in chunk_sec_header or "manner in which complaint shall be made" in chunk_text_lower:
+
+                    # Fine-grained sub-intent weighting
+                    if query_intent["is_filing_manner"] and is_sec35:
+                        hybrid_score = min(1.0, hybrid_score + 0.20)
+                    elif query_intent["is_admissibility"] and is_sec36:
+                        hybrid_score = min(1.0, hybrid_score + 0.25)
+                    elif query_intent["is_post_admission"] and is_sec38:
+                        hybrid_score = min(1.0, hybrid_score + 0.25)
+                    elif is_sec35:
                         hybrid_score = min(1.0, hybrid_score + 0.15)
+                    elif is_sec36:
+                        hybrid_score = min(1.0, hybrid_score + 0.10)
+                    elif is_sec38:
+                        hybrid_score = min(1.0, hybrid_score + 0.08)
+
                 elif chunk_is_definition and not query_intent["is_definition"]:
                     hybrid_score = max(0.0, hybrid_score - 0.30)
                 elif chunk_is_authority and not query_intent["is_authority"]:

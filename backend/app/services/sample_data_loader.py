@@ -163,9 +163,15 @@ SAMPLE_LEGAL_DOCS = [
                 "(c) one or more consumers, where there are numerous consumers having the same interest, with the permission of the District Commission, on behalf of, or for the benefit of, all consumers so interested; or "
                 "(d) the Central Government, the Central Authority or the State Government, as the case may be. "
                 "(2) Every complaint filed under sub-section (1) shall be accompanied with such fee and in such manner, including electronic filing, as may be prescribed. "
-                "(3) The electronic filing of complaints and online payment of fees may be made in such manner and with such fee as may be specified by regulations through the e-Daakhil portal. "
-                "(4) On receipt of a complaint made under sub-section (1), the District Commission may, by order, admit the complaint for being proceeded with, or reject the same: "
-                "Provided that the admissibility of the complaint shall ordinarily be decided within twenty-one days from the date on which the complaint was filed."
+                "(3) The electronic filing of complaints and online payment of fees may be made in such manner and with such fee as may be specified by regulations through the e-Daakhil portal."
+            ),
+            (
+                "Section 36. Proceedings before District Commission",
+                "(1) Every proceeding before the District Commission shall be conducted by the President of that Commission and at least one member thereof, sitting together. "
+                "(2) On receipt of a complaint made under section 35, the District Commission may, by order, admit the complaint for being proceeded with, or reject the same: "
+                "Provided that the admissibility of the complaint shall ordinarily be decided within twenty-one days from the date on which the complaint was filed: "
+                "Provided further that no complaint shall be rejected under this sub-section without giving the complainant an opportunity of being heard. "
+                "(3) Where the District Commission does not decide the issue of admissibility of the complaint within twenty-one days, the complaint shall be deemed to have been admitted."
             ),
             (
                 "Section 38. Procedure on admission of complaint",
