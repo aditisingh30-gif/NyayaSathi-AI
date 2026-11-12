@@ -62,7 +62,82 @@ class TestSupabaseStorageIntegration:
             assert call_kwargs["headers"]["apikey"] == "sb_secret_sample_key_12345"
             assert "Authorization" not in call_kwargs["headers"]
 
-    def test_supabase_legacy_jwt_authentication_headers(self):
+    def test_supabase_url_cleaning_and_normalization(self):
+        """Verify SUPABASE_URL is normalized to origin only without any trailing paths like /rest/v1 or /storage/v1."""
+        test_cases = [
+            ("https://xyzproject.supabase.co/rest/v1", "https://xyzproject.supabase.co"),
+            ("https://xyzproject.supabase.co/rest/v1/", "https://xyzproject.supabase.co"),
+            ("https://xyzproject.supabase.co/storage/v1", "https://xyzproject.supabase.co"),
+            ("https://xyzproject.supabase.co/storage/v1/", "https://xyzproject.supabase.co"),
+            ("https://xyzproject.supabase.co/api/v1", "https://xyzproject.supabase.co"),
+            ("https://xyzproject.supabase.co/", "https://xyzproject.supabase.co"),
+            ("https://xyzproject.supabase.co", "https://xyzproject.supabase.co"),
+            ("  https://xyzproject.supabase.co/rest/v1/  ", "https://xyzproject.supabase.co"),
+        ]
+        for input_url, expected in test_cases:
+            svc = SupabaseStorageService(supabase_url=input_url, secret_key="k", bucket_name="b")
+            assert svc.supabase_url == expected, f"Failed for input: {input_url}"
+
+    def test_exact_constructed_storage_urls(self):
+        """Verify the exact constructed endpoints for upload, download, delete, and list."""
+        svc = SupabaseStorageService(
+            supabase_url="https://xyzproject.supabase.co/rest/v1/",
+            secret_key="sb_secret_exact_urls",
+            bucket_name="nyayasathi-documents",
+        )
+        assert svc.supabase_url == "https://xyzproject.supabase.co"
+
+        # 1. Object URL (used by upload and download)
+        obj_url = svc._object_url("doc_123_sample file.pdf")
+        assert obj_url == "https://xyzproject.supabase.co/storage/v1/object/nyayasathi-documents/doc_123_sample%20file.pdf"
+
+        # 2. Delete URL (batch object delete endpoint)
+        with patch("httpx.Client.request") as mock_req:
+            mock_req.return_value = MagicMock(status_code=200)
+            svc.delete_file("doc_123_sample file.pdf")
+            call_url = mock_req.call_args[0][1]
+            assert call_url == "https://xyzproject.supabase.co/storage/v1/object/nyayasathi-documents"
+
+        # 3. List URL (POST list endpoint)
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=200, json=lambda: [])
+            svc.list_files(paginate=False)
+            call_url = mock_post.call_args[0][0]
+            assert call_url == "https://xyzproject.supabase.co/storage/v1/object/list/nyayasathi-documents"
+
+    def test_bucket_name_with_spaces_and_special_chars_is_encoded(self):
+        """Verify bucket name is properly URL-encoded in all endpoints."""
+        svc = SupabaseStorageService(
+            supabase_url="https://xyzproject.supabase.co",
+            secret_key="sb_secret_key",
+            bucket_name="my legal documents bucket",
+        )
+        assert svc.encoded_bucket == "my%20legal%20documents%20bucket"
+        assert svc._object_url("test.pdf") == "https://xyzproject.supabase.co/storage/v1/object/my%20legal%20documents%20bucket/test.pdf"
+
+    def test_no_secret_keys_in_logs_on_http_failure(self, caplog):
+        """Verify that when Supabase returns an error like 404 PGRST125, secret keys are never logged."""
+        import logging
+        caplog.set_level(logging.DEBUG)
+
+        secret_canary = "sb_secret_super_secret_canary_key_9999"
+        svc = SupabaseStorageService(
+            supabase_url="https://xyzproject.supabase.co",
+            secret_key=secret_canary,
+            bucket_name="nyayasathi-documents",
+        )
+
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=404,
+                text='{"code": "PGRST125", "message": "Invalid path specified in request URL"}'
+            )
+            svc.list_files()
+
+        # Check logs captured
+        all_logs = " ".join([rec.message for rec in caplog.records])
+        assert secret_canary not in all_logs, "Secret key was leaked into application logs!"
+        assert "PGRST125" in all_logs or "404" in all_logs
         """Verify legacy JWT tokens still receive both apikey and Authorization Bearer headers."""
         service = SupabaseStorageService(
             supabase_url="https://mockproject.supabase.co",

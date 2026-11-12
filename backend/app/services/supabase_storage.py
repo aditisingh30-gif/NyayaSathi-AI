@@ -25,11 +25,29 @@ class SupabaseStorageService:
         bucket_name: Optional[str] = None,
         timeout: float = 30.0,
     ):
-        self.supabase_url = (supabase_url or settings.SUPABASE_URL or "").rstrip("/")
-        self.secret_key = secret_key or settings.SUPABASE_SECRET_KEY or ""
-        self.bucket = bucket_name or settings.SUPABASE_BUCKET or "nyayasathi-documents"
+        raw_url = supabase_url if supabase_url is not None else settings.SUPABASE_URL
+        self.supabase_url = self._clean_supabase_url(raw_url)
+        self.secret_key = (secret_key if secret_key is not None else settings.SUPABASE_SECRET_KEY or "").strip()
+        raw_bucket = bucket_name if bucket_name is not None else settings.SUPABASE_BUCKET
+        self.bucket = (raw_bucket or "nyayasathi-documents").strip()
         self.timeout = timeout
         self._is_configured_override: Optional[bool] = None
+
+    @staticmethod
+    def _clean_supabase_url(url: Optional[str]) -> str:
+        """
+        Sanitize and normalize SUPABASE_URL to strictly:
+        https://<PROJECT_ID>.supabase.co
+        Strips trailing slashes and any path segments like /rest/v1, /storage/v1, /api/v1, etc.
+        """
+        if not url or not url.strip():
+            return ""
+        trimmed = url.strip()
+        parsed = urllib.parse.urlparse(trimmed)
+        if parsed.scheme and parsed.netloc:
+            # Reconstruct origin only (scheme + host:port)
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return trimmed.rstrip("/")
 
     @property
     def is_configured(self) -> bool:
@@ -46,12 +64,18 @@ class SupabaseStorageService:
     def is_configured(self):
         self._is_configured_override = None
 
+    @property
+    def encoded_bucket(self) -> str:
+        """Return URL-encoded bucket name."""
+        return urllib.parse.quote(self.bucket, safe="")
+
     def _get_headers(self) -> Dict[str, str]:
         """
         Build authentication headers for Supabase Storage REST API.
         For new Supabase sb_secret_* keys, authentication must be passed using
         the 'apikey' header, NOT as 'Authorization: Bearer'.
         For legacy JWT keys, both are supported.
+        Never log or expose the secret key.
         """
         headers: Dict[str, str] = {
             "apikey": self.secret_key,
@@ -64,7 +88,7 @@ class SupabaseStorageService:
     def _object_url(self, path: str) -> str:
         # Quote path parts except slashes
         clean_path = "/".join(urllib.parse.quote(part) for part in path.split("/"))
-        return f"{self.supabase_url}/storage/v1/object/{self.bucket}/{clean_path}"
+        return f"{self.supabase_url}/storage/v1/object/{self.encoded_bucket}/{clean_path}"
 
     def upload_file(
         self,
@@ -163,7 +187,7 @@ class SupabaseStorageService:
             return False
 
         exact_path = storage_path.strip().lstrip("/")
-        url = f"{self.supabase_url}/storage/v1/object/{self.bucket}"
+        url = f"{self.supabase_url}/storage/v1/object/{self.encoded_bucket}"
         headers = self._get_headers()
         headers["Content-Type"] = "application/json"
         body = {"prefixes": [exact_path]}
@@ -195,7 +219,7 @@ class SupabaseStorageService:
         if not self.is_configured:
             return []
 
-        url = f"{self.supabase_url}/storage/v1/object/list/{self.bucket}"
+        url = f"{self.supabase_url}/storage/v1/object/list/{self.encoded_bucket}"
         headers = self._get_headers()
         headers["Content-Type"] = "application/json"
 

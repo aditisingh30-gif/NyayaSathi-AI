@@ -37,9 +37,9 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = 0.35
 
     # Supabase Storage Settings
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_SECRET_KEY: str = os.getenv("SUPABASE_SECRET_KEY", "")
-    SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "nyayasathi-documents")
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "").strip()
+    SUPABASE_SECRET_KEY: str = os.getenv("SUPABASE_SECRET_KEY", "").strip()
+    SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "nyayasathi-documents").strip()
 
     # Legal Processing Settings
     CHUNK_SIZE: int = 700
