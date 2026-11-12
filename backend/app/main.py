@@ -12,6 +12,7 @@ from app.routers import (
 )
 from app.services.sample_data_loader import preload_sample_legal_corpus
 from app.services.vector_service import vector_service
+from app.services.recovery_service import recover_corpus_from_storage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("NyayaSathi")
@@ -19,13 +20,16 @@ logger = logging.getLogger("NyayaSathi")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Ensure sample benchmark legal corpus is indexed if store is empty
+    # Startup: Ensure legal corpus is recovered/indexed if store is empty
     logger.info("Initializing NyayaSathi AI Legal & Policy Assistant...")
     stats = vector_service.get_stats()
     if stats["total_documents"] == 0:
-        logger.info("ChromaDB is empty. Auto-indexing benchmark legal statutes and contracts...")
-        count = preload_sample_legal_corpus(force=False)
-        logger.info(f"Auto-indexed {count} benchmark legal documents.")
+        logger.info("ChromaDB is empty. Recovering corpus from storage (Supabase / local / benchmarks)...")
+        res = recover_corpus_from_storage()
+        logger.info(
+            f"Recovery complete: {res['recovered_documents']} documents recovered, "
+            f"total corpus now {res['total_documents']} documents ({res['total_chunks']} chunks)."
+        )
     else:
         logger.info(f"Loaded existing legal corpus ({stats['total_documents']} documents, {stats['total_chunks']} chunks).")
     yield
