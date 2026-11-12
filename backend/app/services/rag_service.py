@@ -39,6 +39,18 @@ class RAGLegalService:
         lower_q = raw_query.lower()
         expansions = []
         for term, legal_kw in LEGAL_EXPANSIONS.items():
+            if term == "consumer":
+                if "consumer" in lower_q:
+                    if any(w in lower_q for w in ("procedure", "manner", "filing", "file", "how to", "make a complaint", "steps", "admissibility")):
+                        expansions.append("Consumer Protection Act 2019 Section 35 manner in which complaint shall be made District Commission filing electronic fee e-daakhil")
+                    elif any(w in lower_q for w in ("definition", "define", "meaning", "who is", "what is a consumer", "what is a complaint")):
+                        expansions.append("Consumer Protection Act 2019 Section 2 definitions consumer complaint complainant deficiency unfair trade practice")
+                    elif any(w in lower_q for w in ("central authority", "ccpa", "regulator")):
+                        expansions.append("Consumer Protection Act 2019 Section 10 Central Consumer Protection Authority CCPA")
+                    else:
+                        expansions.append("Consumer Protection Act 2019")
+                continue
+
             if term in lower_q:
                 expansions.append(legal_kw)
 
@@ -76,7 +88,7 @@ class RAGLegalService:
                 "**To get an answer**, please upload the relevant Act or document "
                 "(e.g., Constitution of India PDF) via the **Document Library** tab, then ask again.\n\n"
                 "**Currently indexed documents**: Digital Personal Data Protection Act 2023 · "
-                "Indian Contract Act 1872 · Bharatiya Nyaya Sanhita 2023 · Enterprise Cloud AI MSA\n\n"
+                "Indian Contract Act 1872 · Bharatiya Nyaya Sanhita 2023 · Consumer Protection Act 2019 · Enterprise Cloud AI MSA\n\n"
                 "_NyayaSathi is committed to accuracy: only verified provisions from indexed documents are presented._"
             )
             return QueryResponse(

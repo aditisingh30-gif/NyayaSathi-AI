@@ -21,6 +21,14 @@ LEGAL_STOP_WORDS = {
     "below", "other", "some", "only", "own", "same", "so", "than", "too", "very", "s"
 }
 
+GENERIC_LEGAL_FRAMEWORK_WORDS = {
+    "procedure", "manner", "filing", "file", "filed", "process", "steps",
+    "section", "sections", "article", "articles", "clause", "clauses",
+    "act", "provision", "provisions", "law", "statute", "rule", "rules",
+    "mention", "relevant", "state", "under", "court", "matter", "case",
+    "india", "indian", "national", "central"
+}
+
 
 def extract_substantive_tokens(text: str) -> Set[str]:
     """Extract substantive legal terms, numbers, and identifiers, discarding stop words."""
@@ -53,6 +61,37 @@ def extract_header_provision(header: str) -> Optional[str]:
     if m2:
         return m2.group(1).lower()
     return None
+
+
+def detect_legal_intent(query_str: str) -> Dict[str, bool]:
+    """
+    Classify semantic legal intent of a query (procedural, definition, authority, etc.).
+    """
+    q = query_str.lower()
+
+    # Procedural intent: filing, procedure, manner, steps, where to file, how to complain
+    is_procedural = bool(re.search(
+        r"\b(procedure|manner|filing|file|how\s+to\s+file|how\s+to\s+make|make\s+a\s+complaint|how\s+to\s+complain|steps|process|e-daakhil|prescribed\s+fee|admissibility|where\s+to\s+file)\b",
+        q
+    ))
+
+    # Definition intent: what is, definition, define, meaning, defined as, who is
+    is_definition = bool(re.search(
+        r"\b(definition|definitions|define|defined|meaning|what\s+is\s+a\s+consumer|who\s+is\s+a\s+consumer|what\s+is\s+a\s+complaint|what\s+constitutes|what\s+is\s+meant\s+by)\b",
+        q
+    ))
+
+    # Institutional / Regulatory Authority: CCPA, Central Authority, establishment
+    is_authority = bool(re.search(
+        r"\b(central\s+authority|central\s+consumer\s+protection\s+authority|ccpa|regulator|establishment\s+of\s+(?:the\s+)?central)\b",
+        q
+    ))
+
+    return {
+        "is_procedural": is_procedural,
+        "is_definition": is_definition,
+        "is_authority": is_authority,
+    }
 
 
 class LegalSemanticEmbeddingFunction(EmbeddingFunction[Documents]):
@@ -284,6 +323,11 @@ class ChromaVectorService:
         if exact_match_chunks:
             return exact_match_chunks[:top_k]
 
+        # Classify legal intent of query
+        query_intent = detect_legal_intent(section_guard_query)
+        if not any(query_intent.values()):
+            query_intent = detect_legal_intent(query_text)
+
         scored_chunks = []
 
         for cid, doc_text, meta, dist in zip(ids, docs, metas, distances):
@@ -299,6 +343,12 @@ class ChromaVectorService:
 
             # 3. Guardrail: If substantive terms have zero overlap, the chunk is unrelated!
             if len(overlap_tokens) == 0:
+                continue
+
+            # 3b. Subject matter grounding: If user query contains specific subject/domain terms,
+            # ensure at least one subject term matches the chunk rather than only generic procedural words.
+            query_subject_terms = {t for t in query_substantive if t not in GENERIC_LEGAL_FRAMEWORK_WORDS}
+            if query_subject_terms and len(query_subject_terms.intersection(chunk_tokens)) == 0:
                 continue
 
             # 4. Schedule/header-only penalty: query is for a main article but chunk is from a Schedule/Appendix
@@ -334,14 +384,56 @@ class ChromaVectorService:
             # 6. Hybrid blended score (55% lexical grounding + 45% vector similarity)
             hybrid_score = (0.55 * lexical_ratio) + (0.45 * vector_sim)
 
-            # Bonus: exact target number matches article_number metadata field
+            chunk_sec_header = meta.get("section_header", "").lower().strip()
+            chunk_text_lower = doc_text.lower()
             chunk_article_num = meta.get("article_number", "").lower().strip()
+
+            # Bonus: exact target number matches article_number metadata field
             if target_number and chunk_article_num == target_number:
                 hybrid_score = min(1.0, hybrid_score + 0.35)  # strong boost for exact match
-
             # Bonus: target number found in section_header text
-            elif target_number and target_number in meta.get("section_header", "").lower():
+            elif target_number and target_number in chunk_sec_header:
                 hybrid_score = min(1.0, hybrid_score + 0.25)
+
+            # 7. Intent-aware semantic reranking
+            chunk_is_procedural = (
+                any(p in chunk_sec_header for p in ("manner", "procedure", "proceedings", "filing", "admission of complaint"))
+                or any(p in chunk_text_lower for p in ("manner in which complaint shall be made", "may be filed with a district commission", "electronic filing of complaints", "e-daakhil", "accompanied with such fee", "admissibility of the complaint"))
+            )
+            chunk_is_definition = (
+                "definition" in chunk_sec_header
+                or chunk_article_num == "2"
+                or chunk_sec_header.startswith("section 2")
+                or "unless the context otherwise requires" in chunk_text_lower[:120]
+            )
+            chunk_is_authority = (
+                "central authority" in chunk_sec_header
+                or "central consumer protection authority" in chunk_sec_header
+                or chunk_article_num == "10"
+                or "establishment of central consumer protection authority" in chunk_text_lower
+            )
+
+            if query_intent["is_procedural"]:
+                if chunk_is_procedural:
+                    hybrid_score = min(1.0, hybrid_score + 0.35)
+                    if "manner in which complaint shall be made" in chunk_sec_header or "manner in which complaint shall be made" in chunk_text_lower:
+                        hybrid_score = min(1.0, hybrid_score + 0.15)
+                elif chunk_is_definition and not query_intent["is_definition"]:
+                    hybrid_score = max(0.0, hybrid_score - 0.30)
+                elif chunk_is_authority and not query_intent["is_authority"]:
+                    hybrid_score = max(0.0, hybrid_score - 0.25)
+
+            elif query_intent["is_definition"]:
+                if chunk_is_definition:
+                    hybrid_score = min(1.0, hybrid_score + 0.35)
+                elif chunk_is_procedural:
+                    hybrid_score = max(0.0, hybrid_score - 0.20)
+
+            elif query_intent["is_authority"]:
+                if chunk_is_authority:
+                    hybrid_score = min(1.0, hybrid_score + 0.35)
+                elif chunk_is_definition or chunk_is_procedural:
+                    hybrid_score = max(0.0, hybrid_score - 0.20)
 
             if hybrid_score < min_relevance_threshold:
                 continue

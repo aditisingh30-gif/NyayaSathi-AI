@@ -132,6 +132,49 @@ SAMPLE_LEGAL_DOCS = [
                 "Customer may terminate for convenience upon sixty (60) days advance written notice."
             )
         ]
+    },
+    {
+        "doc_id": "act_consumer_protection_2019",
+        "title": "Consumer Protection Act, 2019",
+        "category": "Consumer Statute",
+        "filename": "Consumer_Protection_Act_2019.pdf",
+        "sections": [
+            (
+                "Section 2. Definitions",
+                "In this Act, unless the context otherwise requires,— "
+                "(5) 'complainant' means (i) a consumer; or (ii) any voluntary consumer association registered under any law; or (iii) the Central Government or any State Government; or (iv) the Central Authority; or (v) one or more consumers, where there are numerous consumers having the same interest; "
+                "(6) 'complaint' means any allegation in writing, made by a complainant for obtaining any relief provided by or under this Act, that an unfair trade practice or restrictive trade practice has been adopted, goods bought suffer from defects, or services hired or availed suffer from deficiency; "
+                "(7) 'consumer' means any person who buys any goods for a consideration which has been paid or promised or partly paid and partly promised, or hires or avails of any service for a consideration, but does not include a person who obtains goods for resale or commercial purpose; "
+                "(11) 'deficiency' means any fault, imperfection, shortcoming or inadequacy in the quality, nature and manner of performance which is required to be maintained by or under any law for the time being in force or has been undertaken to be performed by a person in pursuance of a contract or otherwise in relation to any service; "
+                "(47) 'unfair trade practice' means a trade practice which, for the purpose of promoting the sale, use or supply of any goods or for the provision of any service, adopts any unfair method or unfair or deceptive practice."
+            ),
+            (
+                "Section 10. Establishment of Central Consumer Protection Authority",
+                "(1) The Central Government shall, by notification, establish with effect from such date as it may appoint, "
+                "a Central Authority to be known as the Central Consumer Protection Authority to regulate matters relating to violation of rights of consumers, "
+                "unfair trade practices and false or misleading advertisements which are prejudicial to the interests of public and consumers and to promote, protect and enforce the rights of consumers as a class. "
+                "(2) The Central Authority shall consist of a Chief Commissioner and such number of other Commissioners as may be prescribed, to be appointed by the Central Government."
+            ),
+            (
+                "Section 35. Manner in which complaint shall be made",
+                "(1) A complaint, in relation to any goods sold or delivered or agreed to be sold or delivered or any service provided or agreed to be provided, may be filed with a District Commission by— "
+                "(a) the consumer to whom such goods are sold or delivered or agreed to be sold or delivered or such service is provided or agreed to be provided; "
+                "(b) any recognised consumer association, whether the consumer to whom the goods sold or delivered or service provided is a member of such association or not; "
+                "(c) one or more consumers, where there are numerous consumers having the same interest, with the permission of the District Commission, on behalf of, or for the benefit of, all consumers so interested; or "
+                "(d) the Central Government, the Central Authority or the State Government, as the case may be. "
+                "(2) Every complaint filed under sub-section (1) shall be accompanied with such fee and in such manner, including electronic filing, as may be prescribed. "
+                "(3) The electronic filing of complaints and online payment of fees may be made in such manner and with such fee as may be specified by regulations through the e-Daakhil portal. "
+                "(4) On receipt of a complaint made under sub-section (1), the District Commission may, by order, admit the complaint for being proceeded with, or reject the same: "
+                "Provided that the admissibility of the complaint shall ordinarily be decided within twenty-one days from the date on which the complaint was filed."
+            ),
+            (
+                "Section 38. Procedure on admission of complaint",
+                "(1) The District Commission shall, on admission of a complaint, refer a copy of the admitted complaint within twenty-one days from the date of its admission "
+                "to the opposite party mentioned in the complaint directing him to give his version of the case within a period of thirty days or such extended period not exceeding fifteen days as may be granted by it. "
+                "(2) Where the opposite party on receipt of a copy of the complaint denies or disputes the allegations contained in the complaint, or omits or fails to take any action within the time given, "
+                "the District Commission shall proceed to settle the consumer dispute in the manner specified."
+            )
+        ]
     }
 ]
 

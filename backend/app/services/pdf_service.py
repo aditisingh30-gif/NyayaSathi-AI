@@ -192,7 +192,7 @@ class PDFProcessingService:
                 continue
 
             # Try article-boundary splitting first
-            article_chunks = self._split_by_article_boundaries(page_text)
+            article_chunks = self._split_by_article_boundaries(page_text, doc_title=doc_title)
 
             if article_chunks:
                 # Each article_chunk = (article_number, header, text)
@@ -285,7 +285,7 @@ class PDFProcessingService:
     # ------------------------------------------------------------------
 
     def _split_by_article_boundaries(
-        self, page_text: str
+        self, page_text: str, doc_title: str = ""
     ) -> List[Tuple[str, str, str]]:
         """
         Detect article/section boundaries within a page's text.
@@ -303,6 +303,15 @@ class PDFProcessingService:
 
         results = []
 
+        # Determine default provision label: Constitution uses Article, statutes use Section, contracts use Clause
+        doc_lower = doc_title.lower() if doc_title else ""
+        if "constitution" in doc_lower:
+            default_prefix = "Article"
+        elif any(k in doc_lower for k in ("contract", "agreement", "msa", "nda", "terms")):
+            default_prefix = "Clause"
+        else:
+            default_prefix = "Section"
+
         # If there is content before the first article boundary on this page, capture it
         if matches[0].start() > 0:
             pre_text = page_text[:matches[0].start()].strip()
@@ -310,9 +319,21 @@ class PDFProcessingService:
                 results.append(("", "", pre_text))
 
         for i, m in enumerate(matches):
-            art_num = m.group(1).lower()          # "20", "21", "21a", "22"
+            art_num = m.group(1).lower()          # "20", "21", "21a", "22", "35"
             art_title = m.group(2).strip()        # "Protection of life and personal liberty"
-            art_header = f"Article {m.group(1)}. {art_title}"
+
+            # Inspect the exact matched prefix text to preserve statutory terminology
+            match_str = m.group(0).lower()
+            if "article" in match_str:
+                prefix = "Article"
+            elif "section" in match_str:
+                prefix = "Section"
+            elif "clause" in match_str:
+                prefix = "Clause"
+            else:
+                prefix = default_prefix
+
+            art_header = f"{prefix} {m.group(1)}. {art_title}"
 
             # Text runs from match start to next match start (or end of page)
             start = m.start()

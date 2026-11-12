@@ -124,7 +124,9 @@ class GeminiLegalService:
             "4. NEVER generate generic, unsupported legal implications (e.g. do not state generic compliance or mitigation unless the text explicitly says so).\n"
             "5. If retrieved evidence is insufficient to fully answer aspects of the question, explicitly state that evidence is insufficient.\n"
             "6. Do NOT hallucinate statutory sections or case law not present in the sources.\n"
-            "7. Maintain an objective, professional judicial tone."
+            "7. Maintain an objective, professional judicial tone.\n"
+            "8. NEVER label a statutory section as an article. Statutory Acts (e.g., Consumer Protection Act, Digital Personal Data Protection Act, Indian Contract Act, Bharatiya Nyaya Sanhita) use 'Section', the Constitution of India uses 'Article', and commercial agreements use 'Clause'. Preserve the precise statutory terminology from the retrieved source.\n"
+            "9. NEVER claim a provision directly answers a question unless its actual retrieved text directly supports that claim. If a retrieved provision provides background or definitions rather than the procedure or answer sought, explicitly explain its exact scope and limitations."
         )
 
         user_prompt = (
@@ -203,6 +205,26 @@ class GeminiLegalService:
                 evidence_points.append(
                     "- **Damages for Breach**: Entitles the non-defaulting party to compensation for natural loss, excluding indirect or remote damages."
                 )
+            if "district commission" in clean_lower and ("filed" in clean_lower or "complaint" in clean_lower):
+                evidence_points.append(
+                    "- **Manner of Filing Complaint (Section 35)**: A consumer, recognised consumer association, group of consumers with common interest, or government may file a complaint with the District Commission."
+                )
+            if "electronic filing" in clean_lower or "e-daakhil" in clean_lower:
+                evidence_points.append(
+                    "- **Electronic Filing & Prescribed Fees**: Complaints may be submitted electronically (e-Daakhil) accompanied by the prescribed fee."
+                )
+            if "twenty-one days" in clean_lower and ("admissibility" in clean_lower or "admit" in clean_lower):
+                evidence_points.append(
+                    "- **Admissibility Timeline**: The District Commission ordinarily decides the admissibility of the complaint within 21 days from the date of filing."
+                )
+            if "central consumer protection authority" in clean_lower or "ccpa" in clean_lower:
+                evidence_points.append(
+                    "- **Central Authority (CCPA)**: Regulates matters relating to violation of consumer rights, unfair trade practices, and false or misleading advertisements."
+                )
+            if "definitions" in sec.lower() or "means any" in clean_lower:
+                evidence_points.append(
+                    f"- **Statutory Definitions**: Defines key statutory terms as set out in {sec}."
+                )
 
         provisions_text = "\n\n".join(provisions_blocks)
 
@@ -215,10 +237,23 @@ class GeminiLegalService:
                 "- **Scope of Evidence**: Additional case law, judicial precedents, or administrative guidelines are not present in the indexed text; legal interpretation is strictly bounded by the retrieved provision."
             )
 
+        # Build evidence-grounded summary without claiming unsupported provisions answer the query
+        q_lower = question.lower()
+        top_sec_lower = section.lower()
+        top_text_lower = top_chunk.get("text", "").lower()
+
+        if any(w in q_lower for w in ("procedure", "manner", "filing", "how to file")) and ("manner" in top_sec_lower or "procedure" in top_sec_lower or "filed" in top_text_lower):
+            summary_statement = f"Under **{section}** (Page {page}) of **{doc_title}**, the statute governs the procedure and manner in which a complaint shall be filed before the District Commission."
+        elif "definition" in q_lower or "define" in q_lower or "meaning" in q_lower:
+            summary_statement = f"Under **{section}** (Page {page}) of **{doc_title}**, the statutory definitions establish the legal meaning of terms relevant to your query."
+        elif "central authority" in q_lower or "ccpa" in q_lower:
+            summary_statement = f"Under **{section}** (Page {page}) of **{doc_title}**, the statute establishes and defines the powers of the Central Consumer Protection Authority."
+        else:
+            summary_statement = f"Based on **{doc_title}**, specifically **{section}** (Page {page}), the retrieved text provides verified statutory context regarding *'{question}'*."
+
         return (
             f"### 1. Executive Summary\n"
-            f"Based on the statutory text of **{doc_title}**, specifically under **{section}** (Page {page}), "
-            f"the provision directly addresses your inquiry regarding *'{question}'*.\n\n"
+            f"{summary_statement}\n\n"
             f"### 2. Relevant Legal Provisions (Verbatim Statutory Text)\n"
             f"{provisions_text}\n\n"
             f"### 3. Statutory Analysis & Scope (Evidence-Grounded)\n"
