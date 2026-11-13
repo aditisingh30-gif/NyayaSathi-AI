@@ -29,6 +29,8 @@ def recover_corpus_from_storage() -> Dict[str, int]:
     # 1. Recover from Supabase Storage if configured
     if supabase_storage.is_configured:
         try:
+            # Ensure the bucket exists (provisioning it automatically if not yet created)
+            supabase_storage.ensure_bucket()
             logger.info(f"Checking Supabase bucket '{supabase_storage.bucket}' for stored documents...")
             storage_files = supabase_storage.list_files()
             logger.info(f"Found {len(storage_files)} files in Supabase Storage.")

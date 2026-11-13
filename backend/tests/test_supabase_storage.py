@@ -25,7 +25,9 @@ class TestSupabaseStorageIntegration:
         """When Supabase is not configured, service methods should fail gracefully or return None."""
         unconfigured = SupabaseStorageService(supabase_url="", secret_key="", bucket_name="")
         assert not unconfigured.is_configured
-        assert unconfigured.upload_bytes(b"dummy content", "test.pdf") is False
+        success, err = unconfigured.upload_bytes(b"dummy content", "test.pdf")
+        assert success is False
+        assert err == "Supabase storage is not configured"
         assert unconfigured.download_file("test.pdf") is None
         assert unconfigured.delete_file("test.pdf") is False
         assert unconfigured.list_files() == []
@@ -44,8 +46,9 @@ class TestSupabaseStorageIntegration:
         # Mock successful upload response (HTTP 200)
         with patch("httpx.Client.post") as mock_post:
             mock_post.return_value = MagicMock(status_code=200, json=lambda: {"Key": "test.pdf"})
-            res = service.upload_bytes(test_bytes, "test.pdf")
-            assert res is True
+            success, err = service.upload_bytes(test_bytes, "test.pdf")
+            assert success is True
+            assert err is None
             mock_post.assert_called_once()
             # Verify headers: for sb_secret_* keys, key is sent via apikey and NOT Authorization Bearer
             call_kwargs = mock_post.call_args[1]
@@ -206,14 +209,43 @@ class TestSupabaseStorageIntegration:
         files = {"file": ("test_statute.pdf", pdf_bytes, "application/pdf")}
 
         with patch.object(supabase_storage, "is_configured", True):
-            with patch.object(supabase_storage, "upload_file", side_effect=Exception("Connection refused to Supabase")):
+            with patch.object(supabase_storage, "upload_file", return_value=(False, "HTTP 404 - {\"error\": \"Bucket not found\"}")):
                 response = test_client.post(
                     "/api/documents/upload",
                     files=files,
                     data={"title": "Test Statute", "category": "Statutory Act"}
                 )
                 assert response.status_code == 502
-                assert "Supabase Storage error" in response.json()["detail"]
+                assert "Failed to store document in Supabase Storage" in response.json()["detail"]
+                assert "Bucket not found" in response.json()["detail"]
+
+    def test_supabase_upload_auto_provisions_missing_bucket(self):
+        """When upload receives 404 Bucket not found, ensure_bucket() provisions it and upload retries."""
+        service = SupabaseStorageService(
+            supabase_url="https://mockproject.supabase.co",
+            secret_key="sb_secret_auto_prov",
+            bucket_name="nyayasathi-documents",
+        )
+        assert service.is_configured
+
+        test_bytes = b"%PDF-1.4 sample content"
+
+        # 1st call: POST /storage/v1/object/... -> 404 Bucket not found
+        # 2nd call: GET /storage/v1/bucket/... (check in ensure_bucket) -> 404
+        # 3rd call: POST /storage/v1/bucket (create bucket) -> 201
+        # 4th call: POST /storage/v1/object/... (retry upload) -> 200
+        mock_upload_fail = MagicMock(status_code=404, text='{"statusCode": "404", "error": "Bucket not found"}')
+        mock_bucket_check = MagicMock(status_code=404, text='{"error": "Bucket not found"}')
+        mock_bucket_create = MagicMock(status_code=201, json=lambda: {"name": "nyayasathi-documents"})
+        mock_upload_retry = MagicMock(status_code=200, json=lambda: {"Key": "test.pdf"})
+
+        with patch("httpx.Client.post", side_effect=[mock_upload_fail, mock_bucket_create, mock_upload_retry]) as mock_post:
+            with patch("httpx.Client.get", return_value=mock_bucket_check) as mock_get:
+                success, err = service.upload_bytes(test_bytes, "test.pdf")
+                assert success is True
+                assert err is None
+                assert mock_post.call_count == 3
+                mock_get.assert_called_once()
 
     def test_document_download_endpoint_from_supabase(self, test_client, tmp_path):
         """Verify the /api/documents/{doc_id}/download endpoint retrieves file from Supabase first."""

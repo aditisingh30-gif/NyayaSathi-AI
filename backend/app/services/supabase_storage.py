@@ -4,7 +4,7 @@ import mimetypes
 import os
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from app.config import settings
 
@@ -69,6 +69,52 @@ class SupabaseStorageService:
         """Return URL-encoded bucket name."""
         return urllib.parse.quote(self.bucket, safe="")
 
+    def ensure_bucket(self, public: bool = False) -> bool:
+        """
+        Check if the storage bucket exists, and if not (HTTP 404), create it.
+        Returns True if the bucket exists or was successfully created.
+        """
+        if not self.is_configured:
+            return False
+
+        check_url = f"{self.supabase_url}/storage/v1/bucket/{self.encoded_bucket}"
+        headers = self._get_headers()
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                res = client.get(check_url, headers=headers)
+                if res.status_code == 200:
+                    return True
+                elif res.status_code == 404:
+                    # Bucket does not exist, create it
+                    logger.info(f"Supabase bucket '{self.bucket}' does not exist. Creating private bucket...")
+                    create_url = f"{self.supabase_url}/storage/v1/bucket"
+                    create_body = {
+                        "id": self.bucket,
+                        "name": self.bucket,
+                        "public": public,
+                    }
+                    create_headers = dict(headers)
+                    create_headers["Content-Type"] = "application/json"
+                    c_res = client.post(create_url, headers=create_headers, json=create_body)
+                    if c_res.status_code in (200, 201):
+                        logger.info(f"Successfully created Supabase bucket '{self.bucket}'.")
+                        return True
+                    else:
+                        logger.error(
+                            f"Failed to create Supabase bucket '{self.bucket}': "
+                            f"HTTP {c_res.status_code} - {c_res.text}"
+                        )
+                        return False
+                else:
+                    logger.warning(
+                        f"Supabase bucket check for '{self.bucket}' returned HTTP {res.status_code} - {res.text}"
+                    )
+                    return False
+        except Exception as e:
+            logger.error(f"Network error checking/creating Supabase bucket '{self.bucket}': {e}")
+            return False
+
     def _get_headers(self) -> Dict[str, str]:
         """
         Build authentication headers for Supabase Storage REST API.
@@ -95,13 +141,14 @@ class SupabaseStorageService:
         file_path: Path,
         storage_path: str,
         content_type: Optional[str] = None,
-    ) -> bool:
+    ) -> Tuple[bool, Optional[str]]:
         """
         Upload a file to Supabase storage.
+        Returns (success: bool, error_detail: Optional[str]).
         """
         if not self.is_configured:
             logger.warning("Supabase storage is not configured. Skipping upload.")
-            return False
+            return False, "Supabase storage is not configured"
 
         if not file_path.exists():
             raise FileNotFoundError(f"Source file {file_path} not found.")
@@ -117,13 +164,16 @@ class SupabaseStorageService:
         storage_path: str,
         content_type: str = "application/pdf",
         upsert: bool = True,
-    ) -> bool:
+    ) -> Tuple[bool, Optional[str]]:
         """
         Upload raw bytes to Supabase storage.
+        If upload fails with 404 (Bucket not found), attempts to automatically
+        provision the bucket and retries the upload once.
+        Returns (success: bool, error_detail: Optional[str]).
         """
         if not self.is_configured:
             logger.warning("Supabase storage is not configured. Skipping upload.")
-            return False
+            return False, "Supabase storage is not configured"
 
         url = self._object_url(storage_path)
         headers = self._get_headers()
@@ -136,12 +186,24 @@ class SupabaseStorageService:
                 res = client.post(url, headers=headers, content=file_bytes)
                 if res.status_code in (200, 201):
                     logger.info(f"Successfully uploaded {storage_path} to Supabase bucket '{self.bucket}'.")
-                    return True
-                else:
-                    logger.error(
-                        f"Supabase upload failed for {storage_path}: HTTP {res.status_code} - {res.text}"
-                    )
-                    return False
+                    return True, None
+
+                # If 404 (Bucket not found), attempt auto-provisioning the bucket and retry once
+                if res.status_code == 404 and ("Bucket not found" in res.text or "NoSuchBucket" in res.text):
+                    logger.info(f"Bucket '{self.bucket}' not found during upload. Attempting auto-creation...")
+                    if self.ensure_bucket():
+                        retry_res = client.post(url, headers=headers, content=file_bytes)
+                        if retry_res.status_code in (200, 201):
+                            logger.info(f"Successfully uploaded {storage_path} after auto-creating bucket '{self.bucket}'.")
+                            return True, None
+                        else:
+                            error_msg = f"HTTP {retry_res.status_code} - {retry_res.text}"
+                            logger.error(f"Supabase upload retry failed for {storage_path}: {error_msg}")
+                            return False, error_msg
+
+                error_msg = f"HTTP {res.status_code} - {res.text}"
+                logger.error(f"Supabase upload failed for {storage_path}: {error_msg}")
+                return False, error_msg
         except Exception as e:
             logger.error(f"Network error uploading {storage_path} to Supabase: {e}")
             raise

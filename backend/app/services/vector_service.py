@@ -266,9 +266,13 @@ class ChromaVectorService:
             "category": doc_metadata.get("category", "General Legal"),
             "num_pages": doc_metadata.get("num_pages", 1),
             "num_chunks": len(chunks),
-            "file_size_bytes": doc_metadata.get("total_chars", 0),
+            "file_size_bytes": doc_metadata.get("file_size_bytes", doc_metadata.get("total_chars", 0)),
             "uploaded_at": doc_metadata.get("uploaded_at", ""),
             "summary": doc_metadata.get("summary", ""),
+            "indexing_status": doc_metadata.get("indexing_status", "indexed"),
+            "error_message": doc_metadata.get("error_message"),
+            "storage_path": doc_metadata.get("storage_path"),
+            "source": doc_metadata.get("source", "supabase" if doc_metadata.get("storage_path") else "local"),
         }
         self._save_registry()
         return len(chunks)
@@ -636,13 +640,18 @@ class ChromaVectorService:
         return scored_chunks[:top_k]
 
     def delete_document(self, doc_id: str) -> bool:
+        deleted_from_registry = False
+        if doc_id in self._doc_registry:
+            del self._doc_registry[doc_id]
+            self._save_registry()
+            deleted_from_registry = True
+
         try:
             self.collection.delete(where={"document_id": doc_id})
-            if doc_id in self._doc_registry:
-                del self._doc_registry[doc_id]
-                self._save_registry()
             return True
         except Exception as e:
+            if deleted_from_registry:
+                return True
             print(f"Error deleting document {doc_id}: {e}")
             return False
 
@@ -651,6 +660,39 @@ class ChromaVectorService:
 
     def get_document_by_id(self, doc_id: str) -> Optional[Dict[str, Any]]:
         return self._doc_registry.get(doc_id)
+
+    def register_failed_document(self, doc_info: Dict[str, Any]) -> None:
+        """Register a document that failed processing or download so it can be viewed and retried."""
+        doc_id = doc_info["doc_id"]
+        self._doc_registry[doc_id] = {
+            "doc_id": doc_id,
+            "filename": doc_info.get("filename", "document.pdf"),
+            "title": doc_info.get("title", "Legal Document"),
+            "category": doc_info.get("category", "General Legal"),
+            "num_pages": doc_info.get("num_pages", 0),
+            "num_chunks": doc_info.get("num_chunks", 0),
+            "file_size_bytes": doc_info.get("file_size_bytes", 0),
+            "uploaded_at": doc_info.get("uploaded_at", ""),
+            "summary": doc_info.get("summary", ""),
+            "indexing_status": "failed",
+            "error_message": doc_info.get("error_message", "Unknown error"),
+            "storage_path": doc_info.get("storage_path"),
+            "source": doc_info.get("source", "supabase"),
+        }
+        self._save_registry()
+
+    def update_document_status(self, doc_id: str, status: str, error_message: Optional[str] = None) -> None:
+        """Update indexing status and error message for a document."""
+        if doc_id in self._doc_registry:
+            self._doc_registry[doc_id]["indexing_status"] = status
+            self._doc_registry[doc_id]["error_message"] = error_message
+            self._save_registry()
+
+    def update_document_metadata(self, doc_id: str, meta: Dict[str, Any]) -> None:
+        """Update document registry metadata."""
+        if doc_id in self._doc_registry:
+            self._doc_registry[doc_id].update(meta)
+            self._save_registry()
 
     def get_stats(self) -> Dict[str, Any]:
         return {

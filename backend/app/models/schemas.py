@@ -25,6 +25,10 @@ class DocumentMetadata(BaseModel):
     file_size_bytes: int
     uploaded_at: str
     summary: Optional[str] = None
+    indexing_status: str = "indexed"  # "indexed", "failed", "processing"
+    error_message: Optional[str] = None
+    storage_path: Optional[str] = None
+    source: str = "local"  # "supabase", "local", "benchmark"
 
 
 class DocumentUploadResponse(BaseModel):
@@ -40,6 +44,31 @@ class DocumentUploadResponse(BaseModel):
 class DocumentListResponse(BaseModel):
     total_documents: int
     documents: List[DocumentMetadata]
+
+
+class DocumentSyncResponse(BaseModel):
+    status: str
+    synced_count: int
+    failed_count: int
+    already_indexed_count: int
+    total_supabase_files: int
+    message: str
+    errors: Optional[List[str]] = None
+
+
+class SyncStatusResponse(BaseModel):
+    is_syncing: bool
+    last_sync_at: Optional[str] = None
+    last_sync_result: Optional[Dict[str, Any]] = None
+
+
+class DocumentRetryResponse(BaseModel):
+    status: str
+    doc_id: str
+    title: Optional[str] = None
+    num_pages: Optional[int] = None
+    num_chunks: Optional[int] = None
+    message: str
 
 
 # ==================== RAG & QUERY SCHEMAS ====================

@@ -41,6 +41,34 @@ export async function deleteDocument(docId) {
   return res.json();
 }
 
+export async function syncDocuments(force = false) {
+  const res = await fetch(`${API_BASE}/documents/sync?force=${force}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Supabase document synchronization failed");
+  }
+  return res.json();
+}
+
+export async function getSyncStatus() {
+  const res = await fetch(`${API_BASE}/documents/sync/status`);
+  if (!res.ok) throw new Error("Failed to fetch synchronization status");
+  return res.json();
+}
+
+export async function retryDocument(docId) {
+  const res = await fetch(`${API_BASE}/documents/${docId}/retry`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Retry failed for document ${docId}`);
+  }
+  return res.json();
+}
+
 export async function preloadSamples() {
   const res = await fetch(`${API_BASE}/documents/preload-samples`, {
     method: "POST",
